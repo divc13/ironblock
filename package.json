@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "config:check": "tsx scripts/check-config.ts",
+    "test": "tsx --test test/economy.test.ts test/config-validation.test.ts",
     "test:production": "node --test test/production-preview.test.mjs"
   },
   "keywords": [
@@ -19,8 +21,10 @@
   "description": "Ironblock - a small market town with an observable NPC-run economy.",
   "devDependencies": {
     "@canvasengine/compiler": "2.5.0",
+    "@types/node": "^26.6.6",
     "@vitejs/plugin-vue": "^6.0.10",
     "path-browserify": "^1.0.1",
+    "tsx": "^4.23.15",
     "vite": "^8.3.5"
   },
   "private": true,
@@ -35,7 +39,8 @@
     "@rpgjs/vite": "5.0.3",
     "@signe/di": "^3.1.1",
     "canvasengine": "2.5.1",
-    "pixi.js": "^8.22.0"
+    "pixi.js": "^8.22.0",
+    "zod": "^4.6.7"
   },
   "type": "module"
 }
