@@ -7,6 +7,7 @@ import {
   loadServerAuthConfig,
   validateClientServerAuthConsistency,
 } from './src/server/auth/config';
+import { observabilityApiPlugin } from './src/server/observability';
 
 // This project uses the authoritative Node server for NEAR Auth. Standalone
 // mode remains available for asset smoke tests with RPG_TYPE=rpg.
@@ -67,7 +68,11 @@ export default defineConfig(({ mode }) => {
             },
           },
         },
-      })
+      }),
+      // Read-only spectator API (`/api/market/*`) + `/spectator` dashboard.
+      // Mount point is switchable via IRONBLOCK_OBSERVABILITY_API_PATH. Also
+      // adds spectator.html as a second build entry (dist/spectator.html).
+      observabilityApiPlugin(),
     ],
   };
 });

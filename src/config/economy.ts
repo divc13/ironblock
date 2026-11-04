@@ -649,10 +649,16 @@ export const economy = {
       cadenceSeconds: 12,
       jitterSeconds: 3,
       maxTradeQuantity: 8,
+      maxTradeAttempts: 3,
       buyProbability: 0.55,
       sellProbability: 0.45,
     },
     startingCash: { min: 80, max: 160 },
+    startingInventory: {
+      chance: 0.65,
+      quantityRange: { min: 1, max: 4 },
+      fallbackQuantityRange: { min: 2, max: 5 },
+    },
   },
 
   caravan: {
@@ -675,6 +681,68 @@ export const economy = {
       repairCostPerPoint: 0.6,
       repairThresholdRatio: 0.2,
     },
+  },
+
+  cashRecovery: {
+    dailyRate: 0.12,
+    targetReserveMultiple: 1.8,
+  },
+
+  investments: {
+    profitShareRate: 0.25,
+    minDistribution: 0.01,
+  },
+
+  orders: {
+    maxActive: 4,
+    cadenceDays: 2,
+    expiryDays: 3,
+    rewardMultiplier: { min: 1.15, max: 1.55 },
+    templates: [
+      {
+        id: 'smelter_iron_ingot',
+        issuer: 'Smelter Guild',
+        itemId: 'iron_ingot',
+        quantityRange: { min: 6, max: 12 },
+      },
+      {
+        id: 'kitchen_bread',
+        issuer: 'Town Kitchen',
+        itemId: 'bread',
+        quantityRange: { min: 8, max: 16 },
+      },
+      {
+        id: 'builders_plank',
+        issuer: 'Builders Guild',
+        itemId: 'plank',
+        quantityRange: { min: 6, max: 12 },
+      },
+      {
+        id: 'tailors_cloth',
+        issuer: 'Tailors Guild',
+        itemId: 'cloth',
+        quantityRange: { min: 4, max: 8 },
+      },
+      {
+        id: 'smelter_iron_ore',
+        issuer: 'Smelter Guild',
+        itemId: 'iron_ore',
+        quantityRange: { min: 10, max: 20 },
+      },
+      {
+        id: 'weavers_wool',
+        issuer: 'Weavers Guild',
+        itemId: 'wool',
+        quantityRange: { min: 8, max: 14 },
+      },
+    ],
+  },
+
+  reporting: {
+    eventRetention: 5000,
+    summaryRetentionDays: 30,
+    topMovers: 5,
+    eventSampleSize: 60,
   },
 
   fastForward: {
