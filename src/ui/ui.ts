@@ -1,3 +1,4 @@
+import { characters } from '../config/characters'
 import { economy } from '../config/economy'
 import { readNearAuthSession } from '../client/auth/near-auth'
 import {
@@ -53,6 +54,7 @@ export interface IronblockUI {
   openFastForward(): void
   openRecap(): Promise<void>
   openOrders(): void
+  openTownsfolk(): void
   openEvent(event: MarketEvent): void
   closePanel(): void
   isPanelOpen(): boolean
@@ -70,7 +72,7 @@ interface MountOptions {
 }
 
 type PanelSize = 'default' | 'narrow' | 'wide'
-type PanelKind = 'merchant' | 'inventory' | 'fastforward' | 'recap' | 'orders' | 'event'
+type PanelKind = 'merchant' | 'inventory' | 'fastforward' | 'recap' | 'orders' | 'townsfolk' | 'event'
 
 interface PanelShell {
   title: string
@@ -177,6 +179,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   }
   hudButton('Bag', 'I', () => ui.openInventory())
   hudButton('Orders', 'O', () => ui.openOrders())
+  hudButton('Townsfolk', 'T', () => ui.openTownsfolk())
   hudButton('Week', 'F', () => ui.openFastForward())
   hudButton('Recap', 'R', () => void ui.openRecap())
   const withdrawButton = button('Withdraw to NEAR', openWithdraw, {
@@ -992,6 +995,39 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     }
   }
 
+  /* ---------------------------- townsfolk panel --------------------------- */
+
+  const renderTownsfolk = (): void => {
+    const body = $('div', 'ib-panel-body')
+    body.append(
+      $(
+        'p',
+        'ib-muted',
+        'Eight regulars keep the square moving. Their names appear on the Market Wire whenever they trade, gather or deliver to a guild order.',
+      ),
+    )
+
+    const grid = $('div', 'ib-grid cols-2')
+    for (const character of characters) {
+      const card = $('div', 'ib-card ib-townsfolk-card')
+      card.dataset.character = character.id
+      card.append($('h3', undefined, character.displayName))
+      card.append($('span', 'ib-chip', character.archetype))
+      card.append($('p', 'ib-muted', character.line))
+      if (character.map) {
+        card.append($('small', 'ib-muted', 'Often found in the market square.'))
+      }
+      grid.append(card)
+    }
+    body.append(grid)
+
+    showPanel('townsfolk', {
+      title: 'Townsfolk',
+      subtitle: 'The faces behind the townsfolk trades on the Market Wire.',
+      body,
+    })
+  }
+
   /* -------------------------- fast-forward panel ------------------------- */
 
   const renderFastForward = (): void => {
@@ -1001,8 +1037,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     const intro = $('p', 'ib-muted')
     intro.textContent =
       client.mode === 'server'
-        ? 'Simulate seven days of town trade on the authoritative server. Bots trade, caravans restock, rent is paid, and stalls can close.'
-        : 'Simulate seven days of town trade. The mock timeline is deterministic: bots trade, caravans restock, rent is paid, and stalls can close.'
+        ? 'Simulate seven days of town trade on the authoritative server. Townsfolk trade, caravans restock, rent is paid, and stalls can close.'
+        : 'Simulate seven days of town trade. The mock timeline is deterministic: townsfolk trade, caravans restock, rent is paid, and stalls can close.'
     body.append(intro)
 
     const progress = $('div', 'ib-progress')
@@ -1493,6 +1529,9 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     } else if (key === 'o') {
       event.preventDefault()
       ui.openOrders()
+    } else if (key === 't') {
+      event.preventDefault()
+      ui.openTownsfolk()
     } else if (key === 'f') {
       event.preventDefault()
       ui.openFastForward()
@@ -1561,6 +1600,9 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     openOrders() {
       activeKind = 'orders'
       void renderOrders()
+    },
+    openTownsfolk() {
+      renderTownsfolk()
     },
     openEvent(event) {
       renderEvent(event)

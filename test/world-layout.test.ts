@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { charactersWithMap } from '../src/config/characters'
 import { economy } from '../src/config/economy'
 import {
   isMerchantEventName,
@@ -94,7 +95,10 @@ test('server map content is derived from config with unique event ids', () => {
     (sum, resourceId) => sum + economy.resources.nodes[resourceId].nodeCount,
     0,
   )
-  assert.equal(events.length, merchantCount * 3 + resourceIds.length + nodeCount)
+  assert.equal(
+    events.length,
+    merchantCount * 3 + resourceIds.length + nodeCount + charactersWithMap().length * 2,
+  )
 
   const ids = new Set(events.map(event => event.id))
   assert.equal(ids.size, events.length, 'event ids are unique')

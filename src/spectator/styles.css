@@ -295,6 +295,7 @@ a:hover { color: var(--accent-strong); text-decoration: underline; }
 
 .tape-row .t { color: var(--text-faint); font-size: 11px; flex: none; font-family: var(--mono); }
 .tape-row .desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tape-row .who { color: var(--text); font-weight: 600; }
 .tape-row .qty { color: var(--text-muted); }
 .tape-row .price { margin-left: auto; font-family: var(--mono); white-space: nowrap; }
 .tape-row .merchant { color: var(--text-faint); }
@@ -407,6 +408,53 @@ a:hover { color: var(--accent-strong); text-decoration: underline; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ townsfolk */
+
+.townsfolk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.tfolk {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.tfolk-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tfolk-name {
+  font-weight: 700;
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tfolk-role {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  flex: none;
+}
+
+.tfolk-line {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
 }
 
 /* ------------------------------------------------------------------ events */

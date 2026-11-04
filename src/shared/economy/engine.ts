@@ -1,3 +1,8 @@
+import {
+  botIdForIndex,
+  characterForBotId,
+  characterForBotIndex,
+} from '../../config/characters'
 import { createMarketEvent } from '../market-events'
 import type { CreateMarketEventInput } from '../market-events'
 import { isMerchantBankrupt, quote } from '../pricing'
@@ -178,6 +183,7 @@ export class EconomyEngine {
         )
       }
       this.state = cloneJson(options.state)
+      this.applyBotIdentities()
       this.rng = new DeterministicRng(this.state.rngSeed, this.state.rngState)
     } else {
       this.rng = new DeterministicRng(config.meta.seed)
@@ -233,6 +239,18 @@ export class EconomyEngine {
   /* ---------------------------------------------------------------------- */
   /* State construction                                                     */
   /* ---------------------------------------------------------------------- */
+
+  /**
+   * Rebind persisted bots to the current townsfolk roster. Names are cosmetic:
+   * ids, cash, inventory and schedules are left untouched, so older saves keep
+   * their economy while picking up roster renames.
+   */
+  private applyBotIdentities(): void {
+    this.state.bots = this.state.bots.map((bot, index) => {
+      const identity = characterForBotId(bot.id) ?? characterForBotIndex(index)
+      return { ...bot, displayName: identity.displayName }
+    })
+  }
 
   private createWorldState(): EconomyWorldState {
     const config = this.config
@@ -300,8 +318,8 @@ export class EconomyEngine {
         config,
       )
       bots.push({
-        id: `bot-${String(index + 1).padStart(2, '0')}`,
-        displayName: `Bot ${index + 1}`,
+        id: botIdForIndex(index),
+        displayName: characterForBotIndex(index).displayName,
         cash,
         inventory,
         stamina: config.player.stamina.max,

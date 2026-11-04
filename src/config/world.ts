@@ -157,6 +157,16 @@ export function merchantEventName(merchantId: MerchantId): string {
   return `merchant:${merchantId}`
 }
 
+/** Ambient townsfolk event id, keyed by the stable character id. */
+export function townsfolkEventName(characterId: string): string {
+  return `townsfolk:${characterId}`
+}
+
+/** Name sign placed above an ambient townsfolk character. */
+export function townsfolkSignEventName(characterId: string): string {
+  return `sign:townsfolk:${characterId}`
+}
+
 export function resourceNodeEventName(resourceId: ResourceId, index: number): string {
   return `node:${resourceId}:${index}`
 }

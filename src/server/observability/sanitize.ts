@@ -165,12 +165,14 @@ export function buildTape(
     }
     const side: 'buy' | 'sell' = event.type === 'trade.sell' ? 'sell' : 'buy'
     const merchant = merchantFromEvent(event, config)
+    const actor = publicActor(event, aliases)
     tape.push({
       sequence: event.sequence,
       time: event.time,
       day: Math.floor(event.time / 86400) + 1,
       side,
-      trader: publicActor(event, aliases).id,
+      trader: actor.id,
+      traderName: actor.displayName ?? actor.id,
       merchantId: merchant?.id ?? null,
       merchantName: merchant?.displayName ?? null,
       item: event.item ?? 'unknown',

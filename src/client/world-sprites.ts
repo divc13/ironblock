@@ -1,3 +1,7 @@
+import {
+  characters,
+  type CharacterConfig,
+} from '../config/characters'
 import { economy } from '../config/economy'
 import {
   merchantStallPosition,
@@ -13,6 +17,7 @@ import type {
 
 const merchantLookup = economy.merchants as Record<string, MerchantConfig | undefined>
 const nodeLookup = economy.resources.nodes as Record<string, ResourceNodeConfig | undefined>
+const characterLookup = new Map(characters.map(character => [character.id, character]))
 
 /**
  * Client-side generated sprites for market props.
@@ -431,6 +436,99 @@ const drawNode = (resourceId: ResourceId): HTMLCanvasElement => {
   }
 }
 
+const townsfolkPalette = [
+  { coat: '#4d7fa8', trim: '#d9c9a4', hair: '#2f2419' },
+  { coat: '#7b6fb0', trim: '#e8d9b6', hair: '#3b2a1f' },
+  { coat: '#a2577e', trim: '#f1e2c3', hair: '#241d12' },
+  { coat: '#4f8f6a', trim: '#e3cf9b', hair: '#5b3b22' },
+] as const
+
+const drawTownsfolk = (character: CharacterConfig): HTMLCanvasElement => {
+  const canvas = makeCanvas(64, 88)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return canvas
+
+  const index = Math.max(0, characters.findIndex(candidate => candidate.id === character.id))
+  const palette = townsfolkPalette[index % townsfolkPalette.length]
+  const skin = '#d8a77a'
+  const dark = '#3b2b1d'
+
+  // Ground shadow.
+  ctx.fillStyle = 'rgba(20, 14, 8, 0.28)'
+  ctx.beginPath()
+  ctx.ellipse(32, 83, 18, 4, 0, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Legs and boots.
+  ctx.fillStyle = '#4a3a2b'
+  ctx.fillRect(23, 62, 8, 17)
+  ctx.fillRect(35, 62, 8, 17)
+  ctx.fillStyle = dark
+  roundedRect(ctx, 19, 76, 14, 6, 3)
+  ctx.fill()
+  roundedRect(ctx, 33, 76, 14, 6, 3)
+  ctx.fill()
+
+  // Coat and shoulders.
+  ctx.fillStyle = palette.coat
+  roundedRect(ctx, 16, 34, 32, 34, 8)
+  ctx.fill()
+  ctx.strokeStyle = dark
+  ctx.lineWidth = 2
+  roundedRect(ctx, 16, 34, 32, 34, 8)
+  ctx.stroke()
+
+  // Arms and hands.
+  ctx.fillStyle = palette.coat
+  roundedRect(ctx, 8, 38, 9, 25, 4)
+  ctx.fill()
+  roundedRect(ctx, 47, 38, 9, 25, 4)
+  ctx.fill()
+  ctx.fillStyle = skin
+  ctx.beginPath()
+  ctx.arc(12.5, 65, 4, 0, Math.PI * 2)
+  ctx.arc(51.5, 65, 4, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Coat opening and belt.
+  ctx.strokeStyle = palette.trim
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(32, 38)
+  ctx.lineTo(32, 66)
+  ctx.stroke()
+  ctx.fillStyle = dark
+  ctx.fillRect(18, 56, 28, 4)
+  ctx.fillStyle = '#c9a227'
+  ctx.fillRect(29, 55, 6, 6)
+
+  // Scarf.
+  ctx.fillStyle = palette.trim
+  roundedRect(ctx, 20, 32, 24, 6, 3)
+  ctx.fill()
+
+  // Head, ears and hair.
+  ctx.fillStyle = skin
+  ctx.beginPath()
+  ctx.arc(32, 24, 12, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = palette.hair
+  ctx.beginPath()
+  ctx.arc(32, 20, 12, Math.PI, Math.PI * 2)
+  ctx.fill()
+  ctx.fillRect(20, 20, 4, 7)
+  ctx.fillRect(40, 20, 4, 7)
+
+  // Eyes.
+  ctx.fillStyle = dark
+  ctx.beginPath()
+  ctx.arc(27.5, 25, 1.5, 0, Math.PI * 2)
+  ctx.arc(36.5, 25, 1.5, 0, Math.PI * 2)
+  ctx.fill()
+
+  return canvas
+}
+
 const merchantSubLabel = (merchantId: MerchantId): string => {
   const merchant = merchantLookup[merchantId]
   if (!merchant) return 'Market stall'
@@ -460,6 +558,18 @@ const build = (id: string): WorldSheet | undefined => {
   if (kind === 'sign' && a === 'area' && b && nodeLookup[b]) {
     const area = resourceArea(b)
     return toSheet(id, drawSign(area?.label ?? b, areaSubLabel(b), 'area'))
+  }
+
+  if (kind === 'townsfolk' && a) {
+    const character = characterLookup.get(a)
+    if (character) return toSheet(id, drawTownsfolk(character))
+  }
+
+  if (kind === 'sign' && a === 'townsfolk' && b) {
+    const character = characterLookup.get(b)
+    if (character) {
+      return toSheet(id, drawSign(character.displayName, character.archetype, 'area'))
+    }
   }
 
   if (kind === 'node' && a && nodeLookup[a]) {
@@ -493,6 +603,11 @@ export function worldSpritesheetIds(): string[] {
   for (const resourceId of Object.keys(economy.resources.nodes)) {
     ids.push(`${WORLD_SPRITE_PREFIX}sign:area:${resourceId}`)
     ids.push(`${WORLD_SPRITE_PREFIX}node:${resourceId}`)
+  }
+  for (const character of characters) {
+    if (!character.map) continue
+    ids.push(`${WORLD_SPRITE_PREFIX}townsfolk:${character.id}`)
+    ids.push(`${WORLD_SPRITE_PREFIX}sign:townsfolk:${character.id}`)
   }
   return ids
 }

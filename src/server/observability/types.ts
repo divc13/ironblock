@@ -110,6 +110,7 @@ export interface PublicTrade {
   day: number
   side: 'buy' | 'sell'
   trader: string
+  traderName: string
   merchantId: MerchantId | null
   merchantName: string | null
   item: ItemId

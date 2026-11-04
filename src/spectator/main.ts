@@ -1,4 +1,5 @@
 import './styles.css'
+import { characters } from '../config/characters'
 import type {
   FastForwardClonePayload,
   ProofPayload,
@@ -92,6 +93,7 @@ const rebuildItemNames = (): void => {
 const PANEL_ORDER = {
   health: 'economy-health',
   merchants: 'merchant-cards',
+  townsfolk: 'townsfolk-panel',
   tape: 'market-tape',
   stream: 'event-stream-panel',
   charts: 'charts-panel',
@@ -127,6 +129,11 @@ function buildPanels(): void {
       PANEL_ORDER.merchants,
       'Merchants',
       `<div class="merchant-grid" id="merchant-grid"><p class="loading-note">loading…</p></div>`,
+    ),
+    panel(
+      PANEL_ORDER.townsfolk,
+      'Townsfolk',
+      `<div class="townsfolk-grid" id="townsfolk-grid"><p class="loading-note">loading…</p></div>`,
     ),
   ].join('')
 
@@ -346,6 +353,7 @@ function renderAll(): void {
   renderEventDeltaTime()
   renderHealth()
   renderMerchants()
+  renderTownsfolk()
   renderTape()
   renderEventStream()
   renderCharts()
@@ -410,7 +418,7 @@ function renderHealth(): void {
     {
       label: 'cash in circulation',
       value: money(cash),
-      sub: `${snapshot.merchants.length} stalls · ${snapshot.bots.count} bots · ${snapshot.travelers.count} travelers`,
+      sub: `${snapshot.merchants.length} stalls · ${snapshot.bots.count} townsfolk · ${snapshot.travelers.count} travelers`,
     },
     { label: 'inventory value', value: money(inventoryValue), sub: 'merchants only, at base value' },
     { label: 'sinks today', value: money(snapshot.daily.sinks.total), sub: `all-time ${money(stats.sinks.total)}` },
@@ -435,7 +443,7 @@ function renderHealth(): void {
       sub: `${stats.investments} total · ${money(stats.investmentAmount)}`,
     },
     {
-      label: 'bot trades',
+      label: 'townsfolk trades',
       value: `${stats.botTrades}`,
       sub: `player trades ${stats.totalBuys + stats.totalSells} units`,
     },
@@ -509,6 +517,23 @@ function renderMerchants(): void {
   $('merchant-grid').innerHTML = cards.join('')
 }
 
+function renderTownsfolk(): void {
+  if (!snapshot) return
+  const grid = document.getElementById('townsfolk-grid')
+  if (!grid) return
+  grid.innerHTML = characters
+    .map(
+      character => `<div class="tfolk" data-character="${esc(character.id)}">
+        <div class="tfolk-head">
+          <span class="tfolk-name">${esc(character.displayName)}</span>
+          <span class="tfolk-role">${esc(character.archetype)}</span>
+        </div>
+        <p class="tfolk-line">${esc(character.line)}</p>
+      </div>`,
+    )
+    .join('')
+}
+
 function renderTape(): void {
   if (!snapshot || !config) return
   const list = $('tape-list')
@@ -524,7 +549,7 @@ function renderTape(): void {
       trade => `<li><button class="tape-row" type="button" data-event="${esc(trade.eventId)}">
         <span class="t">d${dayOf(trade.time)} ${timeLabel(trade.time)}</span>
         <span class="side-badge ${trade.side}">${trade.side === 'buy' ? 'BUY' : 'SELL'}</span>
-        <span class="desc"><span class="qty">${trade.quantity}×</span> ${esc(itemLabel(trade.item))} <span class="merchant">@ ${esc(trade.merchantName ?? '?')}</span>${trade.reason ? ` <span class="reason">— ${esc(trade.reason)}</span>` : ''}</span>
+        <span class="desc"><span class="who">${esc(trade.traderName)}</span> <span class="qty">${trade.quantity}×</span> ${esc(itemLabel(trade.item))} <span class="merchant">@ ${esc(trade.merchantName ?? '?')}</span>${trade.reason ? ` <span class="reason">— ${esc(trade.reason)}</span>` : ''}</span>
         <span class="price"><b>${money(trade.unitPrice)}</b>/u</span>
       </button></li>`,
     )
