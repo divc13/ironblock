@@ -7,6 +7,9 @@ import {
   loadServerAuthConfig,
   validateClientServerAuthConsistency,
 } from './src/server/auth/config';
+import { settlementApiPlugin } from './src/server/settlement/vite-plugin';
+import { loadSettlementConfig } from './src/server/settlement/config';
+import { NearApiNep245Chain } from './src/server/settlement/near-chain';
 
 // This project uses the authoritative Node server for NEAR Auth. Standalone
 // mode remains available for asset smoke tests with RPG_TYPE=rpg.
@@ -53,6 +56,11 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       nearAuthApiPlugin(),
+      settlementApiPlugin({
+        authConfig: serverAuthConfig,
+        settlementConfig: loadSettlementConfig(process.env),
+        chain: new NearApiNep245Chain(loadSettlementConfig(process.env)),
+      }),
       tiledMapFolderPlugin({
         sourceFolder: './src/tiled',      // Folder containing your TMX files
         publicPath: '/map',               // Public URL path for maps

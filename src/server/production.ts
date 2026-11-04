@@ -12,10 +12,16 @@ import { createRpgServerTransport } from "@rpgjs/server/node";
 import gameServer from "../server";
 import { loadServerAuthConfig, type ServerAuthConfig } from "./auth/config";
 import { createNearAuthHttpHandler } from "./auth/http";
+import { defaultAuthStore, verifyActiveGameSession } from "./auth/service";
 import {
   InMemoryNearAuthRateLimiter,
   loadNearAuthRateLimitOptions,
 } from "./auth/rate-limit";
+import { loadSettlementConfig } from "./settlement/config";
+import { createSettlementHttpHandler } from "./settlement/http";
+import { NearApiNep245Chain } from "./settlement/near-chain";
+import { InMemorySettlementLedger } from "./settlement/ledger";
+import { InMemoryWithdrawalStore } from "./settlement/withdrawal-store";
 
 export interface ProductionServerOptions {
   port?: number;
@@ -52,12 +58,36 @@ export async function startProductionServer(
   );
   await assertBuiltClient(clientDir);
 
+  const authRateLimiter = new InMemoryNearAuthRateLimiter(loadNearAuthRateLimitOptions());
   const authHandler = createNearAuthHttpHandler({
     config,
-    rateLimiter: new InMemoryNearAuthRateLimiter(
-      loadNearAuthRateLimitOptions(),
-    ),
+    store: defaultAuthStore,
+    rateLimiter: authRateLimiter,
   });
+
+  // Settlement shares the verified session store so a login from /api/auth is
+  // honoured here without re-verifying Auth0.
+  let settlementHandler: ReturnType<typeof createSettlementHttpHandler> | undefined;
+  try {
+    const settlementConfig = loadSettlementConfig();
+    settlementHandler = createSettlementHttpHandler({
+      authConfig: config,
+      settlementConfig,
+      chain: new NearApiNep245Chain(settlementConfig),
+      ledger: new InMemorySettlementLedger(),
+      store: new InMemoryWithdrawalStore(),
+      verifySession: (token) => verifyActiveGameSession(token, config, defaultAuthStore),
+    });
+  } catch (error) {
+    // Settlement env problems must not take down auth/game serving. Health
+    // reflects the degraded state; configured routes 503 for withdrawals.
+    console.warn(
+      "[ironblock] settlement is disabled:",
+      error instanceof Error ? error.message : String(error),
+    );
+    settlementHandler = createSettlementHttpHandler({ authConfig: config });
+  }
+
   const transport = createRpgServerTransport(gameServer as never, {});
   const wsServer = new WebSocketServer({ noServer: true });
 
@@ -91,15 +121,21 @@ export async function startProductionServer(
     }
 
     authHandler(req, res, () => {
-      void serveStatic(req, res, clientDir, basePath).catch((error) => {
-        console.warn("[ironblock] static file failure:", errorMessage(error));
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.end("Internal server error");
-        } else if (!res.writableEnded) {
-          res.end();
-        }
-      });
+      settlementHandler?.(
+        req,
+        res,
+        () => {
+          void serveStatic(req, res, clientDir, basePath).catch((error) => {
+            console.warn("[ironblock] static file failure:", errorMessage(error));
+            if (!res.headersSent) {
+              res.statusCode = 500;
+              res.end("Internal server error");
+            } else if (!res.writableEnded) {
+              res.end();
+            }
+          });
+        },
+      );
     });
   });
 

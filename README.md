@@ -84,11 +84,83 @@ The client derives its login path from Vite's `BASE_URL`, so it posts to
 ## Tests
 
 ```bash
-npm run test:auth           # JWT, MPC identity, sessions, logout, socket, rate limits
-npm run test:production     # standalone asset smoke test (RPG_TYPE=rpg)
-npm run test:production:auth # built preview + production auth probe
-npm test                    # all of the above
+npm run test:auth                 # JWT, MPC identity, sessions, logout, socket, rate limits
+npm run test:settlement           # ledger, withdrawal store, service, settlement HTTP (mocked chain)
+npm run test:production           # standalone asset smoke test (RPG_TYPE=rpg)
+npm run test:production:auth      # built preview + production auth probe
+npm run test:production:settlement # built preview + production settlement probe (no 404 routes)
+npm test                          # all of the above
+npm run smoke:settlement          # REAL testnet transfer: 1 item -> fresh implicit account (operator tool)
 ```
+
+## Settlement (withdrawals)
+
+The settlement bridge moves items from the server-side game ledger to the
+player's MPC-derived implicit account as real NEP-245 tokens on **NEAR
+testnet**. Contract `v2.ironblock-items.testnet`, treasury
+`v2.ironblock-treasury.testnet` (see
+[`contracts/nep245/deployments/testnet.json`](contracts/nep245/deployments/testnet.json)).
+Testnet only; no deposits, no player-signed transfers, no burn in this phase.
+
+### Withdrawal flow
+
+1. The client sends the bearer game session to `POST /api/settlement/withdraw`
+   with `{ requestId, tokenId, amount }`. The server verifies the session
+   (same store as `/api/auth`).
+2. Validation: tokenId must exist on the deployed contract, amount must be a
+   positive integer, and the receiver is pinned to the session's
+   `nearAccountId` — the MPC-derived implicit account. A client cannot request
+   a different receiver.
+3. The ledger (in-memory adapter; the economy engine binds here) atomically
+   **holds** the amount so duplicate submits cannot overdraw.
+4. An idempotent withdrawal record is keyed by `(playerId, requestId)`. A
+   replayed request returns the original record without transferring again.
+5. The server signs `mt_transfer` from the treasury with exactly **1
+   yoctoNEAR**, memo `ironblock withdraw <record id>`, and broadcasts.
+6. The server waits for **FINAL** execution within `NEAR_SETTLEMENT_TIMEOUT_MS`
+   (default 45s). Success commits the ledger debit; an on-the-chain failure
+   releases the hold (`refunded`, safe public message). A timeout keeps
+   `pending` with funds reserved until reconcile decides (no guess).
+7. The response carries status `confirmed`, `pending`/`submitted` (HTTP 202) or
+   an error, plus tx hash + explorer link for success. `GET
+   /api/settlement/withdrawals/:id` re-reads and reconciles pending records.
+
+The treasury key is loaded server-side from (in order)
+`NEAR_TREASURY_PRIVATE_KEY`, `NEAR_TREASURY_KEYSTORE_PATH` (legacy keystore
+JSON), or the default **near-cli-rs keychain** (macOS: keychain item
+`near-testnet-<account>`). The key never reaches the browser, never signs with
+a player key, and no wallet popup or gas prompt exists.
+
+### Ledger integration point
+
+`src/server/settlement/ledger.ts` defines the seam:
+
+- `SettlementLedger`: `hold()` / `commit()` / `release()` / `snapshot()`.
+- `InMemorySettlementLedger` used for tests, smoke runs and the demo. To bind
+  the economy engine, implement the same interface over the engine's inventory
+  and hand it to `createSettlementHttpHandler(...)`. The settlement service
+  never imports an economy branch.
+
+### Real testnet proof
+
+`npm run smoke:settlement` transfers exactly 1 unit of a cheap token
+(`iron_ore` preferred, then `bread`) to a freshly generated implicit account,
+waits for FINAL, and verifies `mt_balance_of`. Verified run:
+
+- token `iron_ore`, amount `1`, receiver
+  `e3136895bba334fab6758465c6f6cccf095ea7af4c552418a598a988ddea67d9`
+- tx `5Xg9zyWN4P4eNpmfMtZtSAgzx5gi3VST4AVtrADjroRs`
+- <https://explorer.testnet.near.org/transactions/5Xg9zyWN4P4eNpmfMtZtSAgzx5gi3VST4AVtrADjroRs>
+- status FINAL; receiver balance `1`; treasury balance after `99999`
+
+### UI integration hook
+
+`src/client/settlement/withdraw-panel.ts` exports `mountWithdrawPanel(options)`
+— a vanilla-DOM panel that shows the player's implicit account, on-chain
+balances, an item/amount picker, the testnet warning, and pending/confirmed/
+failed states with the tx hash + explorer link. The world UI can mount it
+inside any merchant/bank screen; no wallet extension, seed phrase, or gas
+prompt is involved.
 
 ## Authentication flow
 
@@ -132,8 +204,8 @@ Public browser values (safe to ship):
 | Variable | Testnet default / note |
 | --- | --- |
 | `VITE_NEAR_NETWORK` | `testnet` |
-| `VITE_NEAR_RPC_URL` | `https://rpc.testnet.near.org` |
-| `VITE_NEP245_CONTRACT_ID` | `items.ironblock.testnet` (future economy) |
+| `VITE_NEAR_RPC_URL` | `https://rpc.testnet.fastnear.com` |
+| `VITE_NEP245_CONTRACT_ID` | `v2.ironblock-items.testnet` (final deployment) |
 | `VITE_NEAR_AUTH_NETWORK` | `testnet`; any other value is rejected |
 | `VITE_NEAR_AUTH_CLIENT_ID` | shared NEAR Auth testnet client id |
 | `VITE_NEAR_AUTH_DOMAIN` | `login.testnet.fast-auth.com` |
@@ -158,6 +230,13 @@ Server-only values:
 | `NEAR_AUTH_RATE_LIMIT_IP_MAX` | `20` requests per window per socket IP |
 | `NEAR_AUTH_RATE_LIMIT_SUBJECT_MAX` | `8` requests per window per Auth0 subject |
 | `NEAR_AUTH_RATE_LIMIT_CONCURRENT_MAX` | `4` concurrent requests per key |
+| `NEAR_NETWORK` | `testnet`; settlement refuses any other value |
+| `NEAR_RPC_URL` | `https://rpc.testnet.fastnear.com` (testnet JSON-RPC) |
+| `NEAR_NEP245_CONTRACT_ID` | `v2.ironblock-items.testnet` (final deployment) |
+| `NEAR_TREASURY_ACCOUNT_ID` | `v2.ironblock-treasury.testnet` |
+| `NEAR_TREASURY_KEYSTORE_PATH` | optional legacy keystore JSON path; keychain is probed otherwise |
+| `NEAR_TREASURY_PRIVATE_KEY` | optional inline key (injected secrets/CI only); never commit |
+| `NEAR_SETTLEMENT_TIMEOUT_MS` | `45000` (5000..300000); FINAL-finality budget |
 
 Production host values:
 
@@ -174,9 +253,11 @@ The rate limiter is in-process; a multi-process deployment needs a shared limite
 `socket.remoteAddress` is used for the IP limit, and `X-Forwarded-For` is not
 trusted automatically; configure a trusted proxy/limiter in front if needed.
 
-`NEAR_TREASURY_ACCOUNT_ID` and `NEAR_TREASURY_PRIVATE_KEY` are reserved for the
-future economy and are not used by the auth spike. Never expose or commit the
-private key.
+`NEAR_TREASURY_ACCOUNT_ID` / `NEAR_TREASURY_KEYSTORE_PATH` /
+`NEAR_TREASURY_PRIVATE_KEY` configure the settlement treasury signer. The
+near-cli-rs keychain is probed when neither explicit source is set (macOS
+service `near-testnet-v2.ironblock-treasury.testnet`). Never expose the key
+through a `VITE_*` variable and never commit the key or `.env`.
 
 ## Security notes
 
