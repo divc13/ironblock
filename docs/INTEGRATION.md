@@ -114,14 +114,35 @@ still perform the manual checklist in
 [`docs/near-auth-manual-test.md`](near-auth-manual-test.md) with a real
 Google/email account to confirm a full login.
 
-## Remaining work for Phase 2
+## Phase 2 final status
 
-- Wire the live merchant/game loop and market events on top of the validated
-  config (`src/modules/main` still only hosts the map + auth hook).
-- Replace the in-memory auth session/rate-limit stores with shared storage if
-  the server runs multi-process.
-- Settlement flow against `v2.ironblock-treasury.testnet` (the
-  `NEAR_TREASURY_*` env values are placeholders; no keys are committed).
-- World/UI and observability branches are not merged here by design.
-- `npm test` currently reports npm audit warnings for transitive
-  dependencies; review before Phase 2 dependency changes.
+Phase 2 is integrated on `feat/integration-phase2` (final commit `d115ef7`
+before the docs merge). It adds:
+
+- the tuned, deterministic economy engine and service (`feat/economy-tuning`);
+- the playable market-square world, gather/craft/trade/invest UI
+  (`feat/world-ui`);
+- the authenticated `/api/economy/*` API and real HTTP client
+  (`feat/integration-phase2` game wiring);
+- the read-only `/api/market/*` API and `/spectator` dashboard
+  (`feat/observability` + production mount);
+- the NEP-245 testnet withdrawal bridge and economy-backed settlement ledger
+  (`feat/settlement` + `feat/settlement-ledger`);
+- the judge walkthrough, pricing rulebook and hosting runbook in
+  [`DEMO.md`](DEMO.md), [`PRICING.md`](PRICING.md) and
+  [`HOSTING.md`](HOSTING.md).
+
+Final integrated checks: `npm test` 235/235, `npm run config:check`, seven-day
+simulation (2 bankruptcies, 1 investment, 398 order units), production build,
+and production probes for auth, economy, spectator and settlement health.
+
+Still honest limitations:
+
+- A real Google/email Auth0 login must be completed by a human; automated tests
+  stop at the token/MPC boundary.
+- Auth sessions, revocation and rate limits are process-local; run one process.
+- The shared Auth0 testnet client currently allows the local
+  `http://localhost:3000` callback. A public origin needs a tenant callback
+  change.
+- Settlement is testnet-only, treasury-mediated, with no deposits or burns.
+- `npm test` may still report npm audit warnings for transitive dependencies.

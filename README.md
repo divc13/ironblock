@@ -1,15 +1,23 @@
 # Ironblock
 
+**Judge one-liner:** A playable market town where NPC merchants price, go broke,
+and recover in public — and every item can settle as a NEP-245 token on NEAR
+testnet.
+
 Ironblock is a small market-town economy game for the NEAR Hackathon **Games With Real Economies** track.
 
 Players gather materials and trade with NPC merchant agents. Each merchant has its own wallet, inventory and pricing personality. Prices respond to stock, recent demand, cash pressure and competition. A merchant that runs out of cash closes until someone invests in it. A fast-forward mode simulates a week of trading in about a minute.
 
+**Judge path:** start with [`docs/DEMO.md`](docs/DEMO.md) for the timed 5–8
+minute walkthrough.
+
 ## Status
 
-**Phase 1 integrated** on `feat/integration-phase1`: data-driven economy
-foundation, NEAR Auth testnet login and the deployed NEP-245 v2 items contract.
-See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the merge record, final
-testnet IDs and known blockers.
+**Phase 2 integrated** on `feat/integration-phase2`: data-driven economy
+foundation, NEAR Auth testnet login, the deployed NEP-245 v2 items contract,
+the playable market loop, the spectator dashboard and the economy-backed
+settlement bridge. See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the
+merge record, final testnet IDs and known blockers.
 
 Implemented:
 
@@ -35,9 +43,25 @@ Implemented:
   Every item in `src/config/economy.ts` references
   `nep245:v2.ironblock-items.testnet:<tokenId>` with the deployed symbol.
 
-Not implemented yet: the live merchant/game loop on top of the config
-(Phase 2 economy), world UI, settlement flow and observability. The project is
-testnet-only; no real money is used or custodied.
+Phase 2 adds the playable market loop, world UI, spectator dashboard and the
+testnet settlement bridge. The judge-facing path is
+[`docs/DEMO.md`](docs/DEMO.md). The project is testnet-only; no real money is
+used or custodied.
+
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [`docs/DEMO.md`](docs/DEMO.md) | 5–8 minute judge walkthrough: login, gather/smelt/trade, price reasons, seven-day fast-forward, spectator view, NEP-245 proof, limitations. |
+| [`docs/PRICING.md`](docs/PRICING.md) | The readable pricing rulebook: quote pipeline, stock/demand/cash/rival effects, merchant presets, config knobs and the verified checkpoint. |
+| [`docs/observability.md`](docs/observability.md) | Read-only spectator API and dashboard: `/api/market/*`, `/spectator`, privacy boundary and mount points. |
+| [`docs/HOSTING.md`](docs/HOSTING.md) | Development, build, production start, Auth0 callback, subpath and settlement hosting notes. |
+| [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | Phase 1 merge record, final testnet IDs and known blockers. |
+| [`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md) | NEAR Auth login checklist, recorded manual attempt and known limitations. |
+
+Contracts and deployment records live in
+[`contracts/nep245/`](contracts/nep245/), with the final testnet record in
+[`contracts/nep245/deployments/testnet.json`](contracts/nep245/deployments/testnet.json).
 
 ## Stack
 
@@ -46,20 +70,25 @@ testnet-only; no real money is used or custodied.
 - One NEP-245 contract on NEAR testnet for all item types
 - Server-authoritative economy with an observable event stream
 
-## Run
+## Quick start
 
-Development:
+Requirements: **Node 22+** and npm. Testnet only.
 
 ```bash
 npm install
+cp .env.example .env
+# Edit .env and set NEAR_AUTH_SESSION_SECRET to a random 32+ character value.
+# Generate one once with: openssl rand -base64 48
 npm run dev
 ```
 
-Open <http://localhost:3000>.
+Open exactly <http://localhost:3000>. The first successful Auth0 login reloads
+the page once by design; wait for the town and the “Live market” chip. The full
+walkthrough is in [`docs/DEMO.md`](docs/DEMO.md).
 
 The port is deliberate: the shared NEAR Auth testnet Auth0 application allows
 `http://localhost:3000` as a callback URL. `localhost` and port `3000` must match
-exactly. Use the manual checklist in
+exactly. Do not use `127.0.0.1` or another port. Use the manual checklist in
 [`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md).
 
 The default economy config runs the deterministic `demoScenario` story. To run the
@@ -168,10 +197,15 @@ a player key, and no wallet popup or gas prompt exists.
 `src/server/settlement/ledger.ts` defines the seam:
 
 - `SettlementLedger`: `hold()` / `commit()` / `release()` / `snapshot()`.
-- `InMemorySettlementLedger` used for tests, smoke runs and the demo. To bind
-  the economy engine, implement the same interface over the engine's inventory
-  and hand it to `createSettlementHttpHandler(...)`. The settlement service
-  never imports an economy branch.
+- `createEconomySettlementLedger(service)` is the production/demo binding: it
+  reads authoritative inventory from the running economy engine, reserves holds
+  in memory, and debits through `EconomyService.withdrawItem()` only when the
+  on-chain transfer commits. A failed commit restores the reservation.
+- `InMemorySettlementLedger` remains for isolated tests and smoke runs.
+- The Vite dev/preview host uses `createLazyEconomySettlementLedger()` because
+  config creation is synchronous; it resolves the shared economy singleton on
+  first use. The production host starts the singleton during boot and wires the
+  same ledger directly.
 
 ### Real testnet proof
 
@@ -190,8 +224,9 @@ waits for FINAL, and verifies `mt_balance_of`. Verified run:
 `src/client/settlement/withdraw-panel.ts` exports `mountWithdrawPanel(options)`
 — a vanilla-DOM panel that shows the player's implicit account, on-chain
 balances, an item/amount picker, the testnet warning, and pending/confirmed/
-failed states with the tx hash + explorer link. The world UI can mount it
-inside any merchant/bank screen; no wallet extension, seed phrase, or gas
+failed states with the tx hash + explorer link. The HUD **Withdraw to NEAR**
+button mounts it in a closeable overlay and refreshes it on open, using the
+server-issued game-session token. No wallet extension, seed phrase, or gas
 prompt is involved.
 
 ## Authentication flow
@@ -224,6 +259,28 @@ per-tab, so a second tab normally asks for login separately. If storage is
 unavailable, an in-memory cache lets the current page connect, but a reload
 requires signing in again. Auth0 email may be absent; the display name then
 falls back to a short public subject hash.
+
+## Settlement (testnet)
+
+The integrated demo includes a testnet-only settlement bridge. It moves items
+from the server-side game ledger to the player's MPC-derived implicit account as
+real NEP-245 tokens.
+
+- Contract: `v2.ironblock-items.testnet`
+- Treasury: `v2.ironblock-treasury.testnet`
+- Withdrawal route: `POST /api/settlement/withdraw` with the bearer game session
+  and `{ requestId, tokenId, amount }`. The receiver is pinned to the session's
+  `nearAccountId`; a client cannot request a different receiver.
+- The server signs `mt_transfer` from the treasury with exactly 1 yoctoNEAR and
+  waits for `FINAL`. The treasury key never reaches the browser.
+- Recorded proof: [tx `5Xg9zyWN4P4eNpmfMtZtSAgzx5gi3VST4AVtrADjroRs`](https://explorer.testnet.near.org/transactions/5Xg9zyWN4P4eNpmfMtZtSAgzx5gi3VST4AVtrADjroRs)
+  transferred **1 `iron_ore`** from the treasury to a fresh smoke-test implicit
+  account; status `FINAL`.
+
+**Testnet only; treasury-mediated.** There are no deposits, no burn and no
+player-signed transfers in this phase. In-game balances remain off-chain claims
+backed by treasury inventory. See the proof and warnings in
+[`docs/DEMO.md`](docs/DEMO.md).
 
 ## Environment
 

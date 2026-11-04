@@ -33,7 +33,9 @@ The plugin mounts itself for **dev** (`configureServer`), **preview**
 - dev + preview: serves `<base>/api/market/*` and rewrites `<base>/spectator`
   → `<base>/spectator.html` (configurable via `spectatorPath`).
 - build: keeps the existing game entry and adds `spectator.html` as a second
-  HTML input, emitting `dist/spectator.html` beside `dist/index.html`.
+  HTML input. The RPGJS build writes it beside the game entry
+  (`dist/client/spectator.html`); the production mount also checks
+  `dist/spectator.html`.
 
 Plugin options (`ObservabilityPluginOptions`):
 
@@ -151,9 +153,9 @@ JSON unless noted. Public data only (see privacy below).
   annotated playback (`playback.ts`), it does not invent events.
 - Deterministic: identical live state + identical `days` yield identical
   series/events/annotations (verified by tests).
-- Measured on this machine: 7 days ≈ **20,160 steps**, **13,214 events**,
-  **≈ 2 s** server compute; the client playback spreads the simulated week over
-  about 60 s.
+- Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 2 s** server
+  compute; the client playback spreads the simulated week over about 60 s. The
+  event count depends on the live state the clone starts from.
 - Limits: body > 4096 bytes → `413 body_too_large`; malformed JSON /
   non-object → `400 invalid_json`; invalid `days` → `400 invalid_days`.
   Rate limit: **6 requests / 60 s per remote address** → `429 rate_limited`
@@ -183,8 +185,9 @@ public by design. `POST /fast-forward` responses apply the same sanitizer.
 
 ## 3. Spectator dashboard
 
-- URL: `<base>/spectator` in dev and preview; `dist/spectator.html` in a static
-  deployment. No RPGJS client bundle, no UI framework; vanilla TS + inline SVG
+- URL: `<base>/spectator` in dev and preview (with the default base,
+  `http://localhost:3000/spectator`); the build emits `spectator.html` for a
+  static deployment. No RPGJS client bundle, no UI framework; vanilla TS + inline SVG
   charts.
 - Sections: top bar (status, day, clock, connection + demo badge), market tape,
   merchant cards, economy health, event stream with filters and keyboard-usable
@@ -202,14 +205,14 @@ public by design. `POST /fast-forward` responses apply the same sanitizer.
 
 ```sh
 npm install
-npm run dev          # open http://localhost:5173/spectator
+npm run dev          # open http://localhost:3000/spectator
 ```
 
 Production preview:
 
 ```sh
-npm run build        # emits dist/index.html + dist/spectator.html
-npx vite preview     # open http://localhost:4173/spectator
+npm run build        # emits the game entry + spectator.html (dist/client here)
+npx vite preview     # open http://localhost:3000/spectator
 ```
 
 Checks:
