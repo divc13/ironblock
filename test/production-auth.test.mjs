@@ -109,10 +109,10 @@ test("built app exposes auth routes in preview and the production host", async (
       status: "ok",
       service: "ironblock",
     });
-    assert.match(
-      health.headers.get("content-security-policy") ?? "",
-      /default-src 'self'/,
-    );
+    const csp = health.headers.get("content-security-policy") ?? "";
+    assert.match(csp, /default-src 'self'/);
+    assert.match(csp, /script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'/);
+    assert.match(csp, /connect-src 'self' data: blob:/);
     assert.equal(health.headers.get("x-content-type-options"), "nosniff");
   } finally {
     await host.close();

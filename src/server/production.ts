@@ -336,11 +336,15 @@ function setSecurityHeaders(
 ): void {
   const contentSecurityPolicy = [
     "default-src 'self'",
-    "script-src 'self'",
+    // RPGJS/Pixi compiles shaders with `new Function` and instantiates its
+    // WASM runtime in the browser, so this game engine needs both eval
+    // allowances. The runtime also fetches its embedded module through a data
+    // URL. This is the minimum CSP that lets the untouched RPGJS canvas boot.
+    "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob:",
-    `connect-src 'self' ${config.rpcUrl} https://${config.domain} ws: wss:`,
+    `connect-src 'self' data: blob: ${config.rpcUrl} https://${config.domain} ws: wss:`,
     `frame-src https://${config.domain}`,
     `form-action 'self' https://${config.domain}`,
     "worker-src 'self' blob:",
