@@ -9,6 +9,10 @@ import type {
   NearAuthSessionInfo,
   NearAuthSessionResponse,
 } from "../../shared/auth/types";
+import {
+  logAuth0LoginFailure,
+  readableAuth0Error,
+} from "./auth0-errors";
 import { clientNearAuthConfig } from "./config";
 import {
   createNearAuthSessionCache,
@@ -130,13 +134,24 @@ export async function loginWithNearAuth(
       method === "google" ? "google-oauth2" : undefined,
     );
   } catch (error) {
+    logAuth0LoginFailure(error);
     throw new NearAuthFlowError(readableAuth0Error(error));
   }
 
   let accessToken: string;
-  let nearPublicKey: string;
   try {
     accessToken = await auth.provider.getSigningToken();
+  } catch (error) {
+    logAuth0LoginFailure(error);
+    throw new NearAuthFlowError(
+      error instanceof NearAuthFlowError
+        ? error.message
+        : readableAuth0Error(error),
+    );
+  }
+
+  let nearPublicKey: string;
+  try {
     assertMatchingTokenSubjects(idTokenSubject, accessToken);
     const signer = await auth.client.getSigner();
     nearPublicKey = String(await signer.getPublicKey("ed25519"));
@@ -254,15 +269,4 @@ export async function logoutNearAuthSession(): Promise<void> {
   } catch {
     // Local sign-out still succeeds if the server is unreachable.
   }
-}
-
-function readableAuth0Error(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/popup|window|closed/i.test(message)) {
-    return "The sign-in popup was closed or blocked. Allow popups and try again.";
-  }
-  if (/callback|redirect/i.test(message)) {
-    return "Auth0 rejected the callback URL. Check the allowed callback URLs for this origin.";
-  }
-  return "Sign-in could not be completed. Please try again.";
 }
