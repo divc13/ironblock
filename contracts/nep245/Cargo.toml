@@ -1,0 +1,29 @@
+[package]
+name = "ironblock-nep245"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+description = "Ironblock NEP-245 multi-token contract for all in-game item types"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pinned exactly. This is the current stable near-sdk release at the time of writing.
+near-sdk = { version = "=5.30.0", features = ["legacy"] }
+
+[dev-dependencies]
+# `unit-testing` is only used by unit tests, not by the release wasm.
+near-sdk = { version = "=5.30.0", features = ["legacy", "unit-testing"] }
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+
+[workspace]

@@ -1,0 +1,31 @@
+{
+  "network": "testnet",
+  "contract_account_id": "ironblock-items.testnet",
+  "owner_account_id": "ironblock-items.testnet",
+  "treasury_account_id": "ironblock-treasury.testnet",
+  "recorded_at": "2026-11-04",
+  "genesis_minted": true,
+  "wasm_sha256": "1295311b3fcc1363efbdd120e454ac997f8568028e32c8ee90840e862b3ac487",
+  "wasm_size_bytes": 251011,
+  "transactions": {
+    "deploy_and_init": "7VriKWbsju8nCZVLfRQxhdH4zchn9UPURxeVf4gK3WeM",
+    "mint_genesis": "B4jKAnmvKZmVXQB9QDRSGg6dL3jsvQkQQmLiZqwSSwF8",
+    "final_redeploy_without_init": "41WyQp1gHnVapRtvVFRmfXHfozQyxVMGSjQAN79t6Rym",
+    "toolkit_validation_redeploy": "DAxzGc8YwnbRzfsnkyTdALyPPmp4D1E868fAjJcoW6eM",
+    "smoke_transfer_treasury_to_contract": "BFxCEPVJ4JcCLRAUErpA3D7X3aJjtPpz1sFJdUKoqEMq",
+    "smoke_transfer_contract_to_treasury": "BKJn2pZ11vmYvfcedArVRxf8ocDaNDfZjzvyjk1dEjdx"
+  },
+  "tokens": [
+    { "token_id": "iron_ore", "name": "Iron Ore", "symbol": "IORE", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "iron_ingot", "name": "Iron Ingot", "symbol": "IING", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "grain", "name": "Grain", "symbol": "GRN", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "flour", "name": "Flour", "symbol": "FLR", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "timber", "name": "Timber", "symbol": "TMB", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "plank", "name": "Plank", "symbol": "PLK", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "wool", "name": "Wool", "symbol": "WOL", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "cloth", "name": "Cloth", "symbol": "CLT", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "pickaxe", "name": "Pickaxe", "symbol": "PCK", "decimals": 0, "genesis_supply": "1000" },
+    { "token_id": "hoe", "name": "Hoe", "symbol": "HOE", "decimals": 0, "genesis_supply": "1000" },
+    { "token_id": "axe", "name": "Axe", "symbol": "AXE", "decimals": 0, "genesis_supply": "1000" }
+  ]
+}
