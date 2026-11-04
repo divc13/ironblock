@@ -10,6 +10,7 @@ import type {
   SpectatorSnapshot,
   TickActionData,
   TradeActionData,
+  WithdrawActionData,
 } from '../../shared/economy'
 import type { EconomyConfig, ItemId, MerchantId, Quote, TradeSide } from '../../shared/types'
 import { JsonEconomyStore } from './persistence'
@@ -175,6 +176,20 @@ export class EconomyService {
 
   eat(playerId: string, itemId: ItemId): Promise<EconomyActionResult> {
     return this.runAction(() => this.current.eat(playerId, itemId))
+  }
+
+  /**
+   * Debits inventory units and emits a `player.withdraw` market event.
+   *
+   * The callback runs through the serialized action queue and the resulting
+   * world is persisted exactly like every other mutating action.
+   */
+  withdrawItem(
+    playerId: string,
+    itemId: ItemId,
+    amount: number,
+  ): Promise<EconomyActionResult<WithdrawActionData>> {
+    return this.runAction(() => this.current.withdrawItem(playerId, itemId, amount))
   }
 
   repair(playerId: string): Promise<EconomyActionResult> {

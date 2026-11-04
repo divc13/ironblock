@@ -44,6 +44,7 @@ import {
   type SpectatorSnapshot,
   type TickActionData,
   type TradeActionData,
+  type WithdrawActionData,
 } from './types'
 
 const EMPTY_SNAPSHOT = (): MarketEventSnapshot => ({
@@ -1083,6 +1084,80 @@ export class EconomyEngine {
     )
 
     return this.success(action, events, { itemId, restored }, playerId)
+  }
+
+  /**
+   * Debits `amount` units of one item straight out of a player's inventory.
+   *
+   * This is the economy-side seam used by the settlement ledger: units become
+   * unavailable for trading when the withdrawal is committed on testnet. All
+   * validation happens before the inventory is touched, and a real market
+   * event (`player.withdraw` / `withdrawal`) is emitted for the feed.
+   */
+  withdrawItem(
+    playerId: string,
+    itemId: ItemId,
+    amount: number,
+  ): EconomyActionResult<WithdrawActionData> {
+    const action = 'withdrawItem'
+    const player = this.state.players[playerId]
+    if (!player) return this.failure(action, 'unknown_player', `Unknown player "${playerId}"`, playerId)
+    const item = this.config.items[itemId]
+    if (!item) return this.failure(action, 'unknown_item', `Unknown item "${itemId}"`, playerId)
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return this.failure(
+        action,
+        'invalid_amount',
+        `Withdraw amount must be a positive whole number, got ${amount}`,
+        playerId,
+      )
+    }
+    const current = player.inventory[itemId] ?? 0
+    if (current < amount) {
+      return this.failure(
+        action,
+        'insufficient_inventory',
+        `Cannot withdraw ${amount} ${item.displayName}; only ${current} in inventory`,
+        playerId,
+      )
+    }
+
+    // All checks passed: debit now, then report the opening and closing stock.
+    player.inventory[itemId] = current - amount
+
+    const events: SequencedMarketEvent[] = []
+    this.emit(
+      {
+        time: this.state.time,
+        type: 'player.withdraw',
+        actor: { type: 'player', id: player.id, displayName: player.displayName },
+        item: itemId,
+        quantity: amount,
+        price: null,
+        before: { stock: current, cash: player.cash, bid: null, ask: null },
+        after: { stock: current - amount, cash: player.cash, bid: null, ask: null },
+        reasons: [
+          {
+            code: 'withdrawal',
+            label: 'Units withdrawn from game inventory',
+            value: amount,
+            effect: 0,
+            detail: item.displayName,
+          },
+        ],
+        cause: 'withdrawal',
+        causeId: `withdraw-${this.state.sequence + 1}`,
+        message: `${player.displayName} withdrew ${amount}x ${item.displayName} from the game economy.`,
+      },
+      events,
+    )
+
+    return this.success(
+      action,
+      events,
+      { itemId, quantity: amount, remaining: current - amount },
+      playerId,
+    )
   }
 
   repair(playerId: string): EconomyActionResult<RepairActionData> {

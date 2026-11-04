@@ -12,7 +12,16 @@ import { createRpgServerTransport } from "@rpgjs/server/node";
 import gameServer from "../server";
 import { loadServerAuthConfig, type ServerAuthConfig } from "./auth/config";
 import { createNearAuthHttpHandler } from "./auth/http";
+import { defaultAuthStore, verifyActiveGameSession } from "./auth/service";
 import { createEconomyHttpHandler } from "./economy/http";
+import { startEconomyService } from "./economy/runtime";
+import { createObservabilityNodeHandler } from "./observability/node-mount";
+import { asObservabilitySource } from "./observability/source";
+import { loadSettlementConfig } from "./settlement/config";
+import { createEconomySettlementLedger } from "./settlement/economy-ledger";
+import { createSettlementHttpHandler } from "./settlement/http";
+import { NearApiNep245Chain } from "./settlement/near-chain";
+import { InMemoryWithdrawalStore } from "./settlement/withdrawal-store";
 import {
   InMemoryNearAuthRateLimiter,
   loadNearAuthRateLimitOptions,
@@ -34,9 +43,10 @@ export interface ProductionServer {
  * Small authoritative host for the built game:
  * - serves `dist/client`
  * - mounts the same `/api/auth/*` handler used by Vite
+ * - mounts the economy, settlement and read-only observability APIs
  * - hosts the RPGJS WebSocket transport and game-session auth
  *
- * `vite preview` only serves assets and the auth HTTP routes; this host exists
+ * `vite preview` only serves assets and the HTTP routes; this host exists
  * because RPGJS's authoritative WebSocket transport is not started by preview.
  */
 export async function startProductionServer(
@@ -55,6 +65,7 @@ export async function startProductionServer(
 
   const authHandler = createNearAuthHttpHandler({
     config,
+    store: defaultAuthStore,
     rateLimiter: new InMemoryNearAuthRateLimiter(
       loadNearAuthRateLimitOptions(),
     ),
@@ -62,6 +73,38 @@ export async function startProductionServer(
   // Same auth config/store as `/api/auth/*`; the handler lazily shares the
   // economy service singleton with the game server.
   const economyHandler = createEconomyHttpHandler({ config });
+
+  // Start the shared singleton before settlement binds its ledger. The game
+  // transport reuses this same instance, so withdrawals debit live inventory.
+  const economyService = await startEconomyService();
+
+  // Settlement shares the verified session store so a login from /api/auth is
+  // honoured here without re-verifying Auth0. Missing/invalid settlement env or
+  // an absent treasury signer degrades to health-only; it never blocks auth or
+  // game serving.
+  let settlementHandler: ReturnType<typeof createSettlementHttpHandler>;
+  try {
+    const settlementConfig = loadSettlementConfig();
+    settlementHandler = createSettlementHttpHandler({
+      authConfig: config,
+      settlementConfig,
+      chain: new NearApiNep245Chain(settlementConfig),
+      ledger: createEconomySettlementLedger(economyService),
+      store: new InMemoryWithdrawalStore(),
+      verifySession: (token) =>
+        verifyActiveGameSession(token, config, defaultAuthStore),
+    });
+  } catch (error) {
+    console.warn("[ironblock] settlement is disabled:", errorMessage(error));
+    settlementHandler = createSettlementHttpHandler({ authConfig: config });
+  }
+
+  // Read-only `/api/market/*` + the built `/spectator` dashboard. Mounted after
+  // auth/economy/settlement so those routes keep precedence.
+  const observabilityHandler = createObservabilityNodeHandler({
+    getService: async () => asObservabilitySource(await startEconomyService()),
+  });
+
   const transport = createRpgServerTransport(gameServer as never, {});
   const wsServer = new WebSocketServer({ noServer: true });
 
@@ -96,14 +139,21 @@ export async function startProductionServer(
 
     authHandler(req, res, () => {
       economyHandler(req, res, () => {
-        void serveStatic(req, res, clientDir, basePath).catch((error) => {
-          console.warn("[ironblock] static file failure:", errorMessage(error));
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.end("Internal server error");
-          } else if (!res.writableEnded) {
-            res.end();
-          }
+        settlementHandler(req, res, () => {
+          observabilityHandler(req, res, () => {
+            void serveStatic(req, res, clientDir, basePath).catch((error) => {
+              console.warn(
+                "[ironblock] static file failure:",
+                errorMessage(error),
+              );
+              if (!res.headersSent) {
+                res.statusCode = 500;
+                res.end("Internal server error");
+              } else if (!res.writableEnded) {
+                res.end();
+              }
+            });
+          });
         });
       });
     });

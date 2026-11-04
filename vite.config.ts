@@ -4,15 +4,47 @@ import { randomBytes } from 'node:crypto';
 import startServer from './src/server';
 import { nearAuthApiPlugin } from './src/server/auth/vite-plugin';
 import { economyApiPlugin } from './src/server/economy/vite-plugin';
+import { observabilityApiPlugin } from './src/server/observability';
+import { settlementApiPlugin } from './src/server/settlement/vite-plugin';
+import { loadSettlementConfig } from './src/server/settlement/config';
+import { createLazyEconomySettlementLedger } from './src/server/settlement/economy-ledger';
+import { NearApiNep245Chain } from './src/server/settlement/near-chain';
+import { defaultAuthStore, verifyActiveGameSession } from './src/server/auth/service';
 import {
   loadServerAuthConfig,
+  type ServerAuthConfig,
   validateClientServerAuthConsistency,
 } from './src/server/auth/config';
-import { observabilityApiPlugin } from './src/server/observability';
 
 // This project uses the authoritative Node server for NEAR Auth. Standalone
 // mode remains available for asset smoke tests with RPG_TYPE=rpg.
 process.env.RPG_TYPE ??= 'mmorpg';
+
+/**
+ * Settlement options for the Vite dev/preview plugin. Config creation is
+ * synchronous, so the ledger lazily binds the shared economy singleton on its
+ * first request (the same instance the economy API/game use).
+ */
+function settlementPluginOptions(authConfig: ServerAuthConfig) {
+  try {
+    const settlementConfig = loadSettlementConfig(process.env);
+    return {
+      authConfig,
+      settlementConfig,
+      chain: new NearApiNep245Chain(settlementConfig),
+      ledger: createLazyEconomySettlementLedger(),
+      verifySession: (token: string) =>
+        verifyActiveGameSession(token, authConfig, defaultAuthStore),
+    };
+  } catch (error) {
+    // Missing/invalid settlement env must not stop the game or auth routes.
+    console.warn(
+      '[ironblock] settlement is disabled:',
+      error instanceof Error ? error.message : String(error),
+    );
+    return { authConfig };
+  }
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -56,6 +88,11 @@ export default defineConfig(({ mode }) => {
     plugins: [
       nearAuthApiPlugin(),
       economyApiPlugin(),
+      settlementApiPlugin(settlementPluginOptions(serverAuthConfig)),
+      // Read-only spectator API (`/api/market/*`) + `/spectator` dashboard.
+      // Mount point is switchable via IRONBLOCK_OBSERVABILITY_API_PATH. Also
+      // adds spectator.html as a second build entry (dist/spectator.html).
+      observabilityApiPlugin(),
       tiledMapFolderPlugin({
         sourceFolder: './src/tiled',      // Folder containing your TMX files
         publicPath: '/map',               // Public URL path for maps
@@ -70,11 +107,7 @@ export default defineConfig(({ mode }) => {
             },
           },
         },
-      }),
-      // Read-only spectator API (`/api/market/*`) + `/spectator` dashboard.
-      // Mount point is switchable via IRONBLOCK_OBSERVABILITY_API_PATH. Also
-      // adds spectator.html as a second build entry (dist/spectator.html).
-      observabilityApiPlugin(),
+      })
     ],
   };
 });
