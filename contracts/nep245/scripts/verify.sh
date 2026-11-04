@@ -24,14 +24,14 @@ require_var OWNER_ACCOUNT_ID
 require_var TREASURY_ACCOUNT_ID
 
 TOKEN_IDS=(
-    iron_ore iron_ingot grain flour timber plank wool cloth pickaxe hoe axe
+    iron_ore iron_ingot grain flour timber plank wool cloth pickaxe hoe axe bread cloak
 )
 EXPECTED_SUPPLIES=(
-    100000 25000 100000 25000 100000 25000 100000 25000 1000 1000 1000
+    100000 25000 100000 25000 100000 25000 100000 25000 1000 1000 1000 25000 5000
 )
-TOKEN_IDS_JSON='["iron_ore","iron_ingot","grain","flour","timber","plank","wool","cloth","pickaxe","hoe","axe"]'
-EXPECTED_SUPPLIES_JSON='["100000","25000","100000","25000","100000","25000","100000","25000","1000","1000","1000"]'
-EXPECTED_TOTAL=503000
+TOKEN_IDS_JSON='["iron_ore","iron_ingot","grain","flour","timber","plank","wool","cloth","pickaxe","hoe","axe","bread","cloak"]'
+EXPECTED_SUPPLIES_JSON='["100000","25000","100000","25000","100000","25000","100000","25000","1000","1000","1000","25000","5000"]'
+EXPECTED_TOTAL=533000
 
 say "Reading contract config from $CONTRACT_ACCOUNT_ID ($NEAR_NETWORK)"
 CONFIG="$(near_call_view get_config '{}')" || die \
@@ -40,7 +40,7 @@ CONFIG="$(near_call_view get_config '{}')" || die \
 printf '%s' "$CONFIG" | jq -e \
     --arg owner "$OWNER_ACCOUNT_ID" \
     --arg treasury "$TREASURY_ACCOUNT_ID" \
-    '.genesis_minted == true and .token_count == 11 and .owner_id == $owner and .treasury_id == $treasury' \
+    '.genesis_minted == true and .token_count == 13 and .owner_id == $owner and .treasury_id == $treasury' \
     >/dev/null || die "unexpected contract config: $CONFIG"
 
 ITEMS="$(near_call_view get_items '{}')" || die "could not read get_items"
@@ -87,8 +87,9 @@ printf '%s' "$BATCH_SUPPLY" | jq -e --argjson expected "$EXPECTED_SUPPLIES_JSON"
     '. == $expected' >/dev/null || die "mt_batch_supply does not match genesis supplies"
 
 TOKENS="$(near_call_view mt_tokens '{}')" || die "could not read mt_tokens"
-printf '%s' "$TOKENS" | jq -e 'length == 11' >/dev/null || \
-    die "mt_tokens did not return 11 tokens"
+printf '%s' "$TOKENS" | jq -e \
+    'length == 13 and all(.[]; .base_metadata_id == .token_id and .token_metadata != null)' \
+    >/dev/null || die "mt_tokens did not return 13 tokens with complete token views"
 
 UNKNOWN_METADATA="$(near_call_view mt_metadata '{"token_id":"not_an_item"}')" || \
     die "could not read mt_metadata for an unknown token"
@@ -107,6 +108,6 @@ else
     warn "Skipping treasury balance check (--allow-distributed)"
 fi
 
-say "Verified 11 tokens; total supply $TOTAL"
+say "Verified 13 tokens; total supply $TOTAL"
 say "Owner: $OWNER_ACCOUNT_ID"
 say "Treasury: $TREASURY_ACCOUNT_ID"

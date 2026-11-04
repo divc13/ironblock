@@ -6,7 +6,7 @@ use near_sdk::serde_json::Value;
 use near_sdk::{testing_env, PromiseError, PromiseResult};
 
 fn contract_id() -> AccountId {
-    "items.ironblock.testnet".parse().unwrap()
+    "v2.ironblock-items.testnet".parse().unwrap()
 }
 
 fn owner_id() -> AccountId {
@@ -106,15 +106,17 @@ fn genesis_supply_is_minted_once_to_treasury() {
         );
         total += item.genesis_supply;
     }
-    assert_eq!(total, 503_000);
+    assert_eq!(total, 533_000);
+    assert_eq!(contract.mt_supply("bread".to_string()), Some(U128(25_000)));
+    assert_eq!(contract.mt_supply("cloak".to_string()), Some(U128(5_000)));
 
     let event = event_json();
     assert_eq!(event["standard"], "nep245");
     assert_eq!(event["version"], "1.0.0");
     assert_eq!(event["event"], "mt_mint");
     assert_eq!(event["data"][0]["owner_id"], treasury_id().as_str());
-    assert_eq!(event["data"][0]["token_ids"].as_array().unwrap().len(), 11);
-    assert_eq!(event["data"][0]["amounts"].as_array().unwrap().len(), 11);
+    assert_eq!(event["data"][0]["token_ids"].as_array().unwrap().len(), 13);
+    assert_eq!(event["data"][0]["amounts"].as_array().unwrap().len(), 13);
 }
 
 #[test]
@@ -362,6 +364,20 @@ fn metadata_and_decimals_are_correct() {
     assert_eq!(item_json["decimals"], 0);
     assert_eq!(item_json["supply"], "25000");
 
+    let bread = contract.mt_metadata("bread".to_string()).unwrap();
+    assert_eq!(bread.name, "Bread");
+    assert_eq!(bread.symbol, "BREAD");
+    assert_eq!(bread.supply, U128(25_000));
+    assert!(bread.description.contains("loaf"));
+    assert!(bread.icon.starts_with("data:image/svg+xml;base64,"));
+
+    let cloak = contract.mt_metadata("cloak".to_string()).unwrap();
+    assert_eq!(cloak.name, "Cloak");
+    assert_eq!(cloak.symbol, "CLOAK");
+    assert_eq!(cloak.supply, U128(5_000));
+    assert!(cloak.description.contains("cloak"));
+    assert!(cloak.icon.starts_with("data:image/svg+xml;base64,"));
+
     assert!(contract.mt_metadata("mithril".to_string()).is_none());
     assert_eq!(
         contract.mt_batch_metadata(vec!["axe".to_string(), "mithril".to_string()]),
@@ -390,7 +406,25 @@ fn transfer_to_implicit_account_works_without_registration() {
     let owned = contract.mt_tokens_for_owner(implicit.clone(), None, None);
     assert_eq!(owned.len(), 1);
     assert_eq!(owned[0].token_id, "grain");
-    assert_eq!(owned[0].owner_id, Some(implicit));
+    assert_eq!(owned[0].owner_id, Some(implicit.clone()));
+    assert_eq!(owned[0].base_metadata_id, "grain");
+    let token_metadata = owned[0].token_metadata.as_ref().unwrap();
+    assert_eq!(token_metadata.title.as_deref(), Some("Grain"));
+    assert!(token_metadata
+        .media
+        .as_deref()
+        .unwrap()
+        .starts_with("data:image/svg+xml;base64,"));
+
+    let single = contract.mt_token(vec!["bread".to_string()]);
+    let bread = single[0].as_ref().unwrap();
+    assert_eq!(bread.token_id, "bread");
+    assert_eq!(bread.owner_id, None);
+    assert_eq!(bread.base_metadata_id, "bread");
+    assert_eq!(
+        bread.token_metadata.as_ref().unwrap().title.as_deref(),
+        Some("Bread")
+    );
 }
 
 #[test]
@@ -398,19 +432,34 @@ fn enumeration_and_pagination_work() {
     let mut contract = setup_minted();
 
     let all = contract.mt_tokens(None, None);
-    assert_eq!(all.len(), 11);
+    assert_eq!(all.len(), 13);
     assert_eq!(all[0].token_id, "iron_ore");
     assert!(all.iter().all(|token| token.owner_id.is_none()));
+    assert!(all
+        .iter()
+        .all(|token| token.base_metadata_id == token.token_id));
+    assert!(all.iter().all(|token| token.token_metadata.is_some()));
+    assert_eq!(all[11].token_id, "bread");
+    assert_eq!(all[12].token_id, "cloak");
+    let bread_json = serde_json::to_value(&all[11]).unwrap();
+    assert_eq!(bread_json["base_metadata_id"], "bread");
+    assert_eq!(bread_json["token_metadata"]["title"], "Bread");
+    assert!(bread_json["token_metadata"]["media"]
+        .as_str()
+        .unwrap()
+        .starts_with("data:image/svg+xml;base64,"));
 
     let page = contract.mt_tokens(Some(U128(9)), Some(5));
-    assert_eq!(page.len(), 2);
+    assert_eq!(page.len(), 4);
     assert_eq!(page[0].token_id, "hoe");
     assert_eq!(page[1].token_id, "axe");
+    assert_eq!(page[2].token_id, "bread");
+    assert_eq!(page[3].token_id, "cloak");
 
     assert!(contract.mt_tokens(Some(U128(100)), None).is_empty());
     assert_eq!(
         contract.mt_tokens_base_metadata_all(Some(U128(8)), None).len(),
-        3
+        5
     );
 
     set_env(&treasury_id(), 1, 100);
@@ -550,6 +599,45 @@ fn malformed_transfer_call_result_refunds_everything() {
             .mt_balance_of(treasury_id(), "grain".to_string())
             .0,
         100_000
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn oversized_transfer_call_result_refunds_everything() {
+    let mut contract = setup_minted();
+    set_env(&treasury_id(), 1, 100);
+    let _ = contract.mt_transfer_call(
+        bob(),
+        "bread".to_string(),
+        U128(100),
+        None,
+        None,
+        "{}".to_string(),
+    );
+
+    let mut builder = VMContextBuilder::new();
+    builder
+        .current_account_id(contract_id())
+        .signer_account_id(contract_id())
+        .predecessor_account_id(contract_id())
+        .prepaid_gas(Gas::from_tgas(100));
+    let oversized = b" ".repeat(MAX_CALLBACK_RESULT_BYTES + 1);
+    testing_env_with_promise_results(builder.build(), PromiseResult::Successful(oversized));
+
+    let spent = contract.mt_resolve_transfer(
+        treasury_id(),
+        bob(),
+        vec!["bread".to_string()],
+        vec![U128(100)],
+    );
+    assert_eq!(spent, vec![U128(0)]);
+    assert_eq!(contract.mt_balance_of(bob(), "bread".to_string()).0, 0);
+    assert_eq!(
+        contract
+            .mt_balance_of(treasury_id(), "bread".to_string())
+            .0,
+        25_000
     );
 }
 

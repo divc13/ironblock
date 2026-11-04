@@ -135,6 +135,27 @@ ICONS = {
   <path d="M18 54 L21 51" stroke="#78350f" stroke-width="6" stroke-linecap="round"/>
 </svg>
 """,
+    "bread": """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#3f2a14"/>
+  <path d="M12 39 C12 24 21 13 32 13 C43 13 52 24 52 39 L52 45 C52 51 47 55 41 55 L23 55 C17 55 12 51 12 45 Z" fill="#b45309"/>
+  <path d="M15 38 C15 25 22 16 32 16 C42 16 49 25 49 38 L49 43 C49 48 45 51 40 51 L24 51 C19 51 15 48 15 43 Z" fill="#d97706"/>
+  <path d="M20 29 L28 19 M29 29 L37 18 M38 29 L45 21" stroke="#fde68a" stroke-width="3" stroke-linecap="round"/>
+  <path d="M17 45 C25 49 39 49 47 45" stroke="#92400e" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <circle cx="21" cy="41" r="1.5" fill="#fbbf24"/>
+  <circle cx="43" cy="41" r="1.5" fill="#fbbf24"/>
+</svg>
+""",
+    "cloak": """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#1e1b4b"/>
+  <path d="M32 8 C25 8 20 12 18 17 L7 55 L22 55 L28 34 L36 34 L42 55 L57 55 L46 17 C44 12 39 8 32 8 Z" fill="#7c3aed"/>
+  <path d="M32 8 C26 8 21 12 19 18 L14 40 L24 34 L29 20 L35 20 L40 34 L50 40 L45 18 C43 12 38 8 32 8 Z" fill="#8b5cf6"/>
+  <path d="M20 17 C25 27 39 27 44 17" stroke="#ddd6fe" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <circle cx="32" cy="22" r="3.5" fill="#fbbf24" stroke="#f59e0b" stroke-width="1"/>
+  <path d="M22 40 L20 50 M42 40 L44 50" stroke="#6d28d9" stroke-width="2" stroke-linecap="round"/>
+</svg>
+""",
 }
 
 

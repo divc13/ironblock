@@ -1,33 +1,39 @@
 # Ironblock NEP-245 items contract
 
-One NEP-245 multi-token contract for the Ironblock game economy. All 11 item
+One NEP-245 multi-token contract for the Ironblock game economy. All 13 item
 types live in a single contract on NEAR testnet. Item metadata and genesis
 supplies are compiled into the contract; the owner can mint the genesis supply
 to the treasury exactly once. There is no public mint and no burn.
+
+The earlier 11-token deployment at `ironblock-items.testnet` is superseded by
+the final v2 deployment below. The old contract remains on chain for history,
+but game and frontend integrations must use `v2.ironblock-items.testnet`.
 
 ## Testnet deployment
 
 | Field | Value |
 | --- | --- |
 | Network | NEAR testnet |
-| Contract | [`ironblock-items.testnet`](https://explorer.testnet.near.org/accounts/ironblock-items.testnet) |
-| Owner | `ironblock-items.testnet` |
-| Treasury | [`ironblock-treasury.testnet`](https://explorer.testnet.near.org/accounts/ironblock-treasury.testnet) |
-| Initialization | [`new(owner, treasury)`](https://explorer.testnet.near.org/transactions/7VriKWbsju8nCZVLfRQxhdH4zchn9UPURxeVf4gK3WeM) |
-| Genesis mint | [`mint_genesis()`](https://explorer.testnet.near.org/transactions/B4jKAnmvKZmVXQB9QDRSGg6dL3jsvQkQQmLiZqwSSwF8) |
-| Final code redeploy | [`without_init`](https://explorer.testnet.near.org/transactions/41WyQp1gHnVapRtvVFRmfXHfozQyxVMGSjQAN79t6Rym) |
-| Toolkit validation redeploy | [`without_init`](https://explorer.testnet.near.org/transactions/DAxzGc8YwnbRzfsnkyTdALyPPmp4D1E868fAjJcoW6eM) |
-| Wasm SHA-256 | `1295311b3fcc1363efbdd120e454ac997f8568028e32c8ee90840e862b3ac487` |
-| Wasm size | 251,011 bytes |
+| Contract | [`v2.ironblock-items.testnet`](https://explorer.testnet.near.org/accounts/v2.ironblock-items.testnet) |
+| Owner | `v2.ironblock-items.testnet` |
+| Treasury | [`v2.ironblock-treasury.testnet`](https://explorer.testnet.near.org/accounts/v2.ironblock-treasury.testnet) |
+| Contract account creation | [`7mkJ6SY...`](https://explorer.testnet.near.org/transactions/7mkJ6SY695oUhaqq5AnuxTX7c4RMh2tCHEeVgR1sxvaW) |
+| Treasury account creation | [`HuLqWFt...`](https://explorer.testnet.near.org/transactions/HuLqWFtUR1kwUVGi5cfT4rCXtn2Cq5sBU75ZXvAgRP9j) |
+| Deploy + `new(owner, treasury)` | [`BxKHVgr...`](https://explorer.testnet.near.org/transactions/BxKHVgr4v7szRQsieGHJiT2HjYuz6BC2P1T8NM8DVoWd) |
+| Genesis mint | [`2N4JBAH...`](https://explorer.testnet.near.org/transactions/2N4JBAHRuLaFJVi5g1JnmzLZDZpSuXKsKYt9nsRgUfHk) |
+| Implicit-account settlement smoke test | [`3DTv9uJ...`](https://explorer.testnet.near.org/transactions/3DTv9uJQrADyMgqrztg5awhKpBQojWdchJTHosx52Q5r) |
+| Wasm SHA-256 | `51e745dadd1921fd9ea4e1f52f6112bc948da96fbcad2c106bb91e884cec95c4` |
+| Wasm size | 253,936 bytes |
 
 NEARBlocks mirrors:
-[contract](https://testnet.nearblocks.io/address/ironblock-items.testnet) and
-[treasury](https://testnet.nearblocks.io/address/ironblock-treasury.testnet).
+[contract](https://testnet.nearblocks.io/address/v2.ironblock-items.testnet) and
+[treasury](https://testnet.nearblocks.io/address/v2.ironblock-treasury.testnet).
 
 The machine-readable deployment record is in
-[`deployments/testnet.json`](deployments/testnet.json). The smoke test moved
-1 `iron_ore` from the treasury to the contract account and back, so the treasury
-still holds the full genesis supply.
+[`deployments/testnet.json`](deployments/testnet.json). The smoke test sent
+1 `bread` from the treasury to a fresh 64-hex implicit account with no receiver
+registration, then verified the receiver balance was `"1"`. The treasury
+therefore holds 24,999 `bread` and the full supply of the other 12 tokens.
 
 ## Item catalogue
 
@@ -46,7 +52,13 @@ All items use **0 decimals** and integer base units.
 | `pickaxe` | Pickaxe | PCK | 1,000 |
 | `hoe` | Hoe | HOE | 1,000 |
 | `axe` | Axe | AXE | 1,000 |
-| **Total** | | | **503,000** |
+| `bread` | Bread | BREAD | 25,000 |
+| `cloak` | Cloak | CLOAK | 5,000 |
+| **Total** | | | **533,000** |
+
+`bread` is a processed staple aligned with the 25,000 `flour` supply. `cloak`
+is a scarcer crafted wearable; 5,000 leaves room for tailoring sinks without
+starving the merchant economy.
 
 Each item has a display name, description and a self-contained SVG icon encoded
 as a base64 `data:image/svg+xml;base64,...` URI. Icons are generated from
@@ -77,9 +89,36 @@ as a base64 `data:image/svg+xml;base64,...` URI. Icons are generated from
 | `mt_batch_balance_of(account_id, token_ids)` | Batch balances. |
 | `mt_supply(token_id)` | `null` for unknown token IDs. |
 | `mt_batch_supply(token_ids)` | `null` entries for unknown token IDs. |
-| `mt_token(token_ids)` | Core token view. `owner_id` is `null` because items are fungible-like. |
-| `mt_tokens(from_index, limit)` | Paginated enumeration of all 11 tokens. |
-| `mt_tokens_for_owner(account_id, from_index, limit)` | Held tokens only; scans the fixed 11-item set. |
+| `mt_token(token_ids)` | Core token view with `base_metadata_id` and `token_metadata`. |
+| `mt_tokens(from_index, limit)` | Paginated enumeration of all 13 tokens, including metadata. |
+| `mt_tokens_for_owner(account_id, from_index, limit)` | Held tokens only; scans the fixed 13-item set. |
+
+`Token` views now contain:
+
+```json
+{
+  "token_id": "bread",
+  "owner_id": null,
+  "base_metadata_id": "bread",
+  "token_metadata": {
+    "title": "Bread",
+    "description": "A fresh loaf that restores stamina when eaten.",
+    "media": "data:image/svg+xml;base64,...",
+    "media_hash": null,
+    "issued_at": null,
+    "expires_at": null,
+    "starts_at": null,
+    "updated_at": null,
+    "extra": null,
+    "reference": null,
+    "reference_hash": null
+  }
+}
+```
+
+`mt_tokens` returns all 13 token views in about 14 KB of JSON, which is
+reasonable for dashboards and server reconciliation. Paginate with
+`from_index`/`limit` if a client needs smaller responses.
 
 ### NEP-245 metadata extension
 
@@ -123,22 +162,41 @@ Prerequisites: stable Rust with the `wasm32-unknown-unknown` target. The pinned
 ```bash
 cd contracts/nep245
 
-# Unit tests (19 tests)
-cargo test
+# Unit tests (20 tests)
+cargo test --locked
 
-# Reproducible release wasm build
+# Release wasm build used for deployment
 ./scripts/build.sh
-# or directly:
-RUSTFLAGS='-C link-arg=-s' cargo build --locked --target wasm32-unknown-unknown --release
 ```
 
 The build output is
 `target/wasm32-unknown-unknown/release/ironblock_nep245.wasm`.
 
+### Reproducibility note
+
+Use `scripts/build.sh` (or the exact command it wraps), not a plain
+`cargo build --release`. The build needs:
+
+```bash
+RUSTFLAGS='-C link-arg=-s' \
+  cargo build --locked --target wasm32-unknown-unknown --release
+```
+
+The expected SHA-256 for this commit's source is:
+
+```text
+51e745dadd1921fd9ea4e1f52f6112bc948da96fbcad2c106bb91e884cec95c4
+```
+
+The deployed testnet contract reports this same checksum. A plain `cargo build`
+without the `-s` link argument is not the deployment artifact and may produce a
+different hash.
+
 Tests cover genesis supply, single and batch transfers, balance and supply
 conservation, unauthorized mint and transfer rejection, metadata and decimals,
-implicit/hex account transfers, pagination, approvals rejection, and
-`transfer_call` success, partial refund, failure and malformed-result paths.
+all 13 token definitions, implicit/hex account transfers, pagination, token view
+metadata, approvals rejection, and `transfer_call` success, partial refund,
+failure, malformed-result and oversized-result paths.
 
 ## Deployment toolkit
 
@@ -150,7 +208,7 @@ Prerequisites:
 
 - `cargo` + `rustup` (for the wasm target)
 - `near` (near-cli-rs 0.30.x; testnet has been validated with 0.30.1)
-- `jq` for `verify.sh`
+- `jq` for the verification and withdrawal scripts
 
 Setup:
 
@@ -178,7 +236,7 @@ Typical testnet run:
 # 4. Mint the fixed genesis supply to the treasury (idempotent).
 ./scripts/mint-genesis.sh
 
-# 5. Verify config, metadata, supplies and treasury balances.
+# 5. Verify config, metadata, token views, supplies and treasury balances.
 ./scripts/verify.sh
 ```
 
@@ -195,9 +253,53 @@ account is supported; set `OWNER_ACCOUNT_ID` in `.env` and put its key in the
 keychain. `create-testnet-account.sh` only creates a separate owner when
 `CREATE_OWNER_ACCOUNT=1` is set.
 
+The final v2 accounts were created as funded subaccounts of the earlier
+`ironblock-items.testnet` and `ironblock-treasury.testnet` accounts, which keeps
+the deployment pair together and avoids faucet limits. On a clean network, use
+the faucet script with available top-level IDs, or create subaccounts from a
+funded parent with near-cli-rs and save their keys to the keychain.
+
 For mainnet, create the accounts yourself, put the keys in a secure signer, set
 `NEAR_NETWORK=mainnet`, and update the account IDs. The faucet script refuses to
 run off testnet.
+
+## Settlement operations
+
+The settlement agent withdraws items from the treasury with the helper script:
+
+```bash
+./scripts/treasury-withdraw.sh <receiver_id> <token_id> <amount> [memo]
+
+# Example:
+./scripts/treasury-withdraw.sh alice.testnet bread 25 "order-2026-11-04-001"
+```
+
+The script checks that the token exists, rejects zero amounts, requires the
+receiver to differ from the treasury, attaches exactly 1 yoctoNEAR, and signs
+with `TREASURY_ACCOUNT_ID`. It only requires the treasury key; the owner key is
+not needed for withdrawals. On testnet the key is in the near-cli-rs keychain.
+In production, keep the treasury key in an isolated signer/KMS or multisig and
+never ship it to the browser or commit it.
+
+- **Finality:** near-cli-rs waits for final execution by default. Credit a
+  withdrawal only after the transaction is `FINAL` and its status is successful,
+  or after independently observing the `mt_transfer` event and receiver balance.
+- **Memo / idempotency:** the on-chain `memo` is informational; the contract does
+  not enforce uniqueness. The settlement agent should store an idempotency key
+  with the tx hash before broadcasting, put that key in the memo, and on retry
+  check the stored tx hash plus `mt_balance_of`/event history instead of sending
+  a duplicate. A re-sent transaction is a new transfer and is not deduplicated
+  on chain.
+- **Signer expectations:** `TREASURY_ACCOUNT_ID` must be a normal account with a
+  full-access key in the configured signer. `OWNER_ACCOUNT_ID` is only needed for
+  the one-time genesis mint and ownership changes. Do not print or log the key.
+- **No approvals:** the settlement agent cannot pull items from a player's
+  account. It can only transfer from accounts it controls, such as the treasury
+  and merchant accounts.
+
+The implicit-account smoke test is part of the final deployment record:
+`mt_transfer` sent 1 `bread` to a fresh 64-hex account without any receiver
+registration, and `mt_balance_of` returned `"1"`.
 
 ## Security notes and limitations
 
@@ -220,7 +322,7 @@ run off testnet.
 - **No receiver registration / storage deposits.** Transfers do not require the
   receiver to register, so implicit and hex accounts work out of the box. The
   contract pays storage for each `(account, token_id)` balance entry. Because the
-  token set is fixed at 11, this is bounded per account but not globally: a
+  token set is fixed at 13, this is bounded per account but not globally: a
   funded attacker can create many account/token entries with 1-yocto transfers
   and consume the contract's storage balance. This is a deliberate testnet
   trade-off. Before mainnet, add receiver registration/storage deposits, an
@@ -230,18 +332,18 @@ run off testnet.
 - **1 yoctoNEAR guard.** Every transfer method requires exactly 1 yoctoNEAR to
   prevent accidental function-call access-key use and replay-style confusion.
 - **`transfer_call` trust boundary.** The receiver is called with 20 Tgas and the
-  settlement callback with 10 Tgas; callers must attach at least 40 Tgas. A
-  failed, malformed, oversized, or wrong-length receiver result is treated as a
-  full refund, not as an error that strands tokens. The callback is private.
+  settlement callback with 10 Tgas; callers must attach at least 40 Tgas.
+  Receiver results are capped at 16 KiB. A failed, malformed, oversized, or
+  wrong-length result is treated as a full refund, not as an error that strands
+  tokens. The callback is private.
 - **Testnet data only.** This deployment is for the hackathon and testnet. No
   real money is custodied.
 
 ## Integration notes
 
-- Use contract ID `ironblock-items.testnet` on NEAR testnet. The repository's
-  root `.env.example` still has the scaffold placeholder
-  `items.ironblock.testnet`; set `VITE_NEP245_CONTRACT_ID` to the deployed ID
-  when wiring the frontend.
+- Use contract ID `v2.ironblock-items.testnet` and treasury
+  `v2.ironblock-treasury.testnet` on NEAR testnet. The root `.env.example` has
+  been updated to these final IDs.
 - Amounts are integer base units and zero decimals, so `"25"` means 25 items,
   not 0.25. NEP-245 JSON responses encode `U128` amounts as decimal strings.
 - For writes, attach exactly `1` yoctoNEAR to `mt_transfer`,
@@ -251,6 +353,9 @@ run off testnet.
   ship it to the browser. Players can hold items in their own NEAR accounts and
   transfer them directly; merchant/treasury accounts are controlled by the game
   server.
+- Token views now include `base_metadata_id` and `token_metadata`. Update any
+  strict TypeScript/Rust deserializer or GraphQL schema that was written against
+  the old two-field `Token` shape.
 - For `mt_transfer_call`, the receiver must expose:
 
   ```rust
@@ -264,10 +369,13 @@ run off testnet.
   ```
 
   Returning all amounts refunds the whole transfer. The settlement callback also
-  refunds everything if the receiver call fails.
+  refunds everything if the receiver call fails, returns malformed JSON, or
+  returns more than 16 KiB.
 - Subscribe to `EVENT_JSON:` logs for mint/transfer indexing. The contract's
   `get_items`, `mt_metadata`, `mt_batch_balance_of` and `mt_batch_supply` views
   cover the common dashboard and server reconciliation needs.
+- The old `ironblock-items.testnet` contract has only 11 tokens and is
+  superseded. Do not mix balances between the old and v2 deployments.
 
 ## Layout
 
@@ -278,7 +386,7 @@ contracts/nep245/
   src/tests.rs            unit tests
   src/icons.rs            generated SVG data URLs
   icons/*.svg             source icons
-  scripts/                build, account creation, deploy, mint, verify
+  scripts/                build, account creation, deploy, mint, withdraw, verify
   deployments/            public testnet deployment record
   .env.example            committed configuration template
 ```

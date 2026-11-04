@@ -47,8 +47,9 @@ const GAS_FOR_MT_RESOLVE_TRANSFER: Gas = Gas::from_tgas(10);
 /// Minimum gas the caller must attach to a `*_transfer_call` method.
 const MIN_GAS_FOR_TRANSFER_CALL: Gas = Gas::from_tgas(40);
 /// Cap on the receiver's returned data. A larger/malformed response results in a
-/// full refund rather than a callback panic.
-const MAX_CALLBACK_RESULT_BYTES: usize = 1_000_000;
+/// full refund rather than a callback panic. 13 tokens need only a few hundred
+/// bytes; 16 KiB leaves generous headroom while bounding callback memory use.
+const MAX_CALLBACK_RESULT_BYTES: usize = 16 * 1024;
 
 /// Static definition of one item type. Metadata and supply are compiled into the
 /// contract so a compromised owner key cannot alter item definitions or supplies.
@@ -62,7 +63,7 @@ pub struct ItemDefinition {
     pub genesis_supply: u128,
 }
 
-pub const ITEMS: [ItemDefinition; 11] = [
+pub const ITEMS: [ItemDefinition; 13] = [
     ItemDefinition {
         token_id: "iron_ore",
         name: "Iron Ore",
@@ -151,6 +152,22 @@ pub const ITEMS: [ItemDefinition; 11] = [
         icon: icons::AXE_ICON,
         genesis_supply: 1_000,
     },
+    ItemDefinition {
+        token_id: "bread",
+        name: "Bread",
+        symbol: "BREAD",
+        description: "A fresh loaf that restores stamina when eaten.",
+        icon: icons::BREAD_ICON,
+        genesis_supply: 25_000,
+    },
+    ItemDefinition {
+        token_id: "cloak",
+        name: "Cloak",
+        symbol: "CLOAK",
+        description: "A warm woven cloak and a mark of standing in town.",
+        icon: icons::CLOAK_ICON,
+        genesis_supply: 5_000,
+    },
 ];
 
 fn item_definition(token_id: &str) -> Option<&'static ItemDefinition> {
@@ -160,12 +177,16 @@ fn item_definition(token_id: &str) -> Option<&'static ItemDefinition> {
 /// NEP-245 core `Token` view object. `owner_id` is only meaningful for tokens with
 /// a unique owner (supply 1); Ironblock items are fungible-like, so it is `None`
 /// for `mt_token` / `mt_tokens`. `mt_tokens_for_owner` reports the queried account
-/// for convenience.
+/// for convenience. `base_metadata_id` is the token ID because every item has a
+/// one-to-one base metadata record. `token_metadata` is populated for all token
+/// views so clients do not need a second round trip.
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
     pub token_id: TokenId,
     pub owner_id: Option<AccountId>,
+    pub base_metadata_id: String,
+    pub token_metadata: Option<TokenMetadata>,
 }
 
 /// Current NEP-245 metadata extension: contract-level metadata.
@@ -597,12 +618,7 @@ impl Contract {
     pub fn mt_token(&self, token_ids: Vec<TokenId>) -> Vec<Option<Token>> {
         token_ids
             .iter()
-            .map(|token_id| {
-                item_definition(token_id).map(|_| Token {
-                    token_id: token_id.clone(),
-                    owner_id: None,
-                })
-            })
+            .map(|token_id| item_definition(token_id).map(|item| token_view(item, None)))
             .collect()
     }
 
@@ -616,15 +632,12 @@ impl Contract {
         let (start, end) = page_bounds(ITEMS.len(), from_index, limit);
         ITEMS[start..end]
             .iter()
-            .map(|item| Token {
-                token_id: item.token_id.to_string(),
-                owner_id: None,
-            })
+            .map(|item| token_view(item, None))
             .collect()
     }
 
     /// List token IDs with a non-zero balance for `account_id`. This scans the
-    /// fixed 11-item set, so gas is bounded and enumeration cannot grow with
+    /// fixed 13-item set, so gas is bounded and enumeration cannot grow with
     /// state.
     pub fn mt_tokens_for_owner(
         &self,
@@ -635,10 +648,7 @@ impl Contract {
         let owned: Vec<Token> = ITEMS
             .iter()
             .filter(|item| self.balance_of(&account_id, item.token_id) > 0)
-            .map(|item| Token {
-                token_id: item.token_id.to_string(),
-                owner_id: Some(account_id.clone()),
-            })
+            .map(|item| token_view(item, Some(account_id.clone())))
             .collect();
         let (start, end) = page_bounds(owned.len(), from_index, limit);
         owned[start..end].to_vec()
@@ -969,6 +979,15 @@ fn token_metadata(item: &ItemDefinition) -> TokenMetadata {
         extra: None,
         reference: None,
         reference_hash: None,
+    }
+}
+
+fn token_view(item: &ItemDefinition, owner_id: Option<AccountId>) -> Token {
+    Token {
+        token_id: item.token_id.to_string(),
+        owner_id,
+        base_metadata_id: item.token_id.to_string(),
+        token_metadata: Some(token_metadata(item)),
     }
 }
 
