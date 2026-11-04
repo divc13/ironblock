@@ -153,7 +153,7 @@ JSON unless noted. Public data only (see privacy below).
   annotated playback (`playback.ts`), it does not invent events.
 - Deterministic: identical live state + identical `days` yield identical
   series/events/annotations (verified by tests).
-- Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 2 s** server
+- Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 3 s** server
   compute; the client playback spreads the simulated week over about 60 s. The
   event count depends on the live state the clone starts from.
 - Limits: body > 4096 bytes → `413 body_too_large`; malformed JSON /

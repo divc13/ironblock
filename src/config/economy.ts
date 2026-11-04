@@ -631,6 +631,34 @@ export const economy = {
       margins: { buy: 0.12, sell: 0.18 },
       restockRate: { intervalSeconds: 240, unitsPerTick: 5, targetRatio: 0.9 },
     },
+    // Noir fixer archetype: premium, discreet, and focused on finished goods.
+    sable: {
+      id: 'sable',
+      displayName: 'Sable Voss',
+      stallSlot: 7,
+      personality: 'premium',
+      cash: 640,
+      reserve: 90,
+      targetStock: { bread: 24, cloth: 16, cloak: 8 },
+      buys: ['bread', 'cloth', 'cloak'],
+      sells: ['bread', 'cloth', 'cloak'],
+      margins: { buy: 0.12, sell: 0.19 },
+      restockRate: { intervalSeconds: 180, unitsPerTick: 4, targetRatio: 0.92 },
+    },
+    // Space-opera smuggler archetype: fast, two-sided ore and timber quotes.
+    rook: {
+      id: 'rook',
+      displayName: 'Rook Kestrel',
+      stallSlot: 8,
+      personality: 'aggressive',
+      cash: 560,
+      reserve: 85,
+      targetStock: { iron_ore: 36, iron_ingot: 20, timber: 32, plank: 24 },
+      buys: ['iron_ore', 'iron_ingot', 'timber', 'plank'],
+      sells: ['iron_ore', 'iron_ingot', 'timber', 'plank'],
+      margins: { buy: 0.08, sell: 0.14 },
+      restockRate: { intervalSeconds: 100, unitsPerTick: 7, targetRatio: 0.95 },
+    },
   },
 
   pricing: {

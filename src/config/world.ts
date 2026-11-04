@@ -53,6 +53,8 @@ export const world = {
     4: { x: 232, y: 688, color: '#7b6fb0' },
     5: { x: 640, y: 688, color: '#4d7fa8' },
     6: { x: 1048, y: 688, color: '#a2577e' },
+    7: { x: 384, y: 944, color: '#3f7f7a' },
+    8: { x: 896, y: 944, color: '#b3653f' },
   } satisfies Record<number, MerchantStallConfig>,
 
   /** Fallback grid used for any stall slot not listed above. */
