@@ -336,6 +336,15 @@ export interface OrderTemplateConfig {
   quantityRange: YieldRange
 }
 
+/** Optional bot participation on the town order board. */
+export interface OrderBotParticipationConfig {
+  enabled: boolean
+  /** Chance a bot with matching stock checks the order board on an action. */
+  chance: number
+  /** Cap on units a single bot delivery may hand to an order. */
+  maxUnitsPerDelivery: number
+}
+
 /** Daily bulk-order board. All quantities and rewards stay data-driven. */
 export interface OrdersConfig {
   maxActive: number
@@ -344,6 +353,53 @@ export interface OrdersConfig {
   expiryDays: number
   rewardMultiplier: YieldRange
   templates: OrderTemplateConfig[]
+  botParticipation: OrderBotParticipationConfig
+}
+
+export type ScenarioShockKind = 'cash-drain' | 'bulk-purchase'
+
+/** A deterministic story beat that applies once at a configured world time. */
+export interface ScenarioShockConfig {
+  id: string
+  /** 1-based world day. */
+  day: number
+  /** Second of the day, 0-86399. */
+  atSecond: number
+  merchantId: MerchantId
+  kind: ScenarioShockKind
+  /** Cash removed by a cash-drain shock. */
+  amount?: number
+  /** Item bought by a bulk-purchase shock. */
+  itemId?: ItemId
+  /** Maximum units sought by a bulk-purchase shock. */
+  quantity?: number
+  /** Unit price offered for a bulk-purchase shock. */
+  unitPrice?: number
+  /** Plain-language narrative shown in the event feed. */
+  message: string
+  /** Optional scheduled rescue investment from the configured scenario investor. */
+  rescue?: ScenarioRescueConfig
+}
+
+export interface ScenarioRescueConfig {
+  investorId: string
+  amount: number
+  /** Wait this long after the bankruptcy before the investor acts. */
+  delaySeconds: number
+}
+
+export interface ScenarioInvestorConfig {
+  id: string
+  displayName: string
+  cash: number
+}
+
+/** Data-only demo story. Empty shocks keep the economy in its stable sandbox mode. */
+export interface ScenarioConfig {
+  id: string
+  description: string
+  investor?: ScenarioInvestorConfig
+  shocks: ScenarioShockConfig[]
 }
 
 export interface ReportingConfig {
@@ -380,6 +436,7 @@ export interface EconomyConfig {
   cashRecovery: CashRecoveryConfig
   investments: InvestmentConfig
   orders: OrdersConfig
+  scenario: ScenarioConfig
   reporting: ReportingConfig
   fastForward: FastForwardConfig
 }
@@ -495,6 +552,7 @@ export type EventCauseType =
   | 'configuration'
   | 'order'
   | 'use'
+  | 'shock'
 
 export type MarketEventType =
   | 'trade.buy'
@@ -522,6 +580,7 @@ export type MarketEventType =
   | 'order.accepted'
   | 'order.fulfilled'
   | 'order.expired'
+  | 'system.shock'
 
 export interface EventActor {
   type: EventActorType

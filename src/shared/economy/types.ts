@@ -11,7 +11,7 @@ import type {
 } from '../types'
 
 /** The runtime engine schema, independent of the data-config schema version. */
-export const ECONOMY_ENGINE_SCHEMA_VERSION = 1
+export const ECONOMY_ENGINE_SCHEMA_VERSION = 2
 
 export interface ConfigFingerprint {
   hash: string
@@ -60,6 +60,18 @@ export interface CaravanRuntimeState {
   nextArrivalAt: number
   lastArrivalAt: number | null
   arrivals: number
+}
+
+export interface ScenarioRescueRecord {
+  shockId: string
+  investorId: string
+  investmentId: string
+  at: number
+}
+
+export interface ScenarioRuntimeState {
+  appliedShockIds: string[]
+  rescues: ScenarioRescueRecord[]
 }
 
 export interface InvestmentDistribution {
@@ -126,6 +138,8 @@ export interface SinkTotals {
   rent: number
   salesTax: number
   repairs: number
+  /** Cash removed from merchants by configured scenario shocks. */
+  shocks: number
   total: number
 }
 
@@ -228,6 +242,7 @@ export interface EconomyWorldState extends MarketState {
   caravan: CaravanRuntimeState
   investments: InvestmentRecord[]
   orders: OrderState[]
+  scenario: ScenarioRuntimeState
   daily: DailyAccumulator
   summaries: DaySummary[]
   stats: EconomyStats
@@ -367,6 +382,7 @@ export interface SpectatorSnapshot {
   caravan: CaravanRuntimeState
   investments: InvestmentRecord[]
   orders: OrderState[]
+  scenario: ScenarioRuntimeState
   stats: EconomyStats
   daily: DailyAccumulator
   summaries: DaySummary[]

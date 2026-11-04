@@ -68,7 +68,7 @@ const round = (value: number, decimals: number, mode: EconomyConfig['pricing']['
 }
 
 const emptyTradeTotals = () => ({ buys: 0, sells: 0, volume: 0, value: 0 })
-const emptySinkTotals = () => ({ rent: 0, salesTax: 0, repairs: 0, total: 0 })
+const emptySinkTotals = () => ({ rent: 0, salesTax: 0, repairs: 0, shocks: 0, total: 0 })
 const emptyCaravanTotals = () => ({
   arrivals: 0,
   unitsSold: 0,
@@ -224,6 +224,9 @@ export class EconomyEngine {
     if (this.state.daily.day !== this.state.day) {
       this.state.daily = this.buildDailyAccumulator(this.state.day, (this.state.day - 1) * 86400)
     }
+    if (!this.state.scenario) {
+      this.state.scenario = { appliedShockIds: [], rescues: [] }
+    }
   }
 
   /* ---------------------------------------------------------------------- */
@@ -339,6 +342,10 @@ export class EconomyEngine {
       },
       investments: [],
       orders: [],
+      scenario: {
+        appliedShockIds: [],
+        rescues: [],
+      },
       daily: {
         day: 1,
         startedAt: 0,
@@ -492,6 +499,7 @@ export class EconomyEngine {
       caravan: cloneJson(this.state.caravan),
       investments: cloneJson(this.state.investments),
       orders: cloneJson(this.state.orders),
+      scenario: cloneJson(this.state.scenario),
       stats: cloneJson(this.state.stats),
       daily: cloneJson(this.state.daily),
       summaries: cloneJson(this.state.summaries),
@@ -1173,6 +1181,18 @@ export class EconomyEngine {
       )
     }
 
+    const events: SequencedMarketEvent[] = []
+    const record = this.investInMerchant(player, merchant, value, events)
+    return this.success(action, events, { investment: cloneJson(record) }, playerId)
+  }
+
+  /** Shared investment application used by players and scheduled scenario rescuers. */
+  private investInMerchant(
+    player: PlayerRuntimeState,
+    merchant: MerchantRuntimeState,
+    value: number,
+    events: SequencedMarketEvent[],
+  ): InvestmentRecord {
     const beforeCash = merchant.cash
     player.cash = roundMoney(player.cash - value, this.config)
     merchant.cash = roundMoney(merchant.cash + value, this.config)
@@ -1185,11 +1205,11 @@ export class EconomyEngine {
     // distribution calculation.
     merchant.cashAtDayStart = roundMoney(merchant.cashAtDayStart + value, this.config)
 
-    const id = `inv_${stableHash64(`${this.state.seed}:${this.state.sequence + 1}:${playerId}:${merchantId}:${value}`)}`
+    const id = `inv_${stableHash64(`${this.state.seed}:${this.state.sequence + 1}:${player.id}:${merchant.id}:${value}`)}`
     const record: InvestmentRecord = {
       id,
-      playerId,
-      merchantId,
+      playerId: player.id,
+      merchantId: merchant.id,
       amount: value,
       day: this.state.day,
       time: this.state.time,
@@ -1210,7 +1230,6 @@ export class EconomyEngine {
       this.config,
     )
 
-    const events: SequencedMarketEvent[] = []
     this.emit(
       {
         time: this.state.time,
@@ -1225,7 +1244,7 @@ export class EconomyEngine {
           {
             code: 'reopen',
             label: 'Merchant reopened',
-            value: value,
+            value,
             effect: 0,
             detail: `${merchant.displayName} cash ${this.money(beforeCash)} -> ${this.money(merchant.cash)}`,
           },
@@ -1269,7 +1288,7 @@ export class EconomyEngine {
       events,
     )
 
-    return this.success(action, events, { investment: cloneJson(record) }, playerId)
+    return record
   }
 
   acceptOrder(playerId: string, orderId: string): EconomyActionResult<OrderActionData> {
@@ -1636,8 +1655,8 @@ export class EconomyEngine {
 
   private advanceStep(seconds: number, events: SequencedMarketEvent[]): void {
     if (seconds <= 0) return
-    const previousDay = this.state.day
     this.state.time = roundSeconds(this.state.time + seconds)
+    this.applyDueScenarioShocks(events)
 
     const demandDecay = Math.max(
       0,
@@ -1692,6 +1711,7 @@ export class EconomyEngine {
     for (const merchant of Object.values(this.state.merchants)) {
       this.detectBankruptcy(merchant, events)
     }
+    this.applyDueScenarioRescues(events)
 
     const currentDay = Math.floor(this.state.time / 86400) + 1
     while (this.state.day < currentDay) {
@@ -1700,6 +1720,169 @@ export class EconomyEngine {
       this.state.day = closingDay + 1
       this.startDay(this.state.day, events)
     }
+  }
+
+  private applyDueScenarioShocks(events: SequencedMarketEvent[]): void {
+    const shocks = [...this.config.scenario.shocks].sort((left, right) => {
+      const leftAt = (left.day - 1) * 86400 + left.atSecond
+      const rightAt = (right.day - 1) * 86400 + right.atSecond
+      return leftAt - rightAt || stableCompare(left.id, right.id)
+    })
+
+    for (const shock of shocks) {
+      if (this.state.scenario.appliedShockIds.includes(shock.id)) continue
+      const dueAt = (shock.day - 1) * 86400 + shock.atSecond
+      if (this.state.time + 1e-9 < dueAt) continue
+      this.state.scenario.appliedShockIds.push(shock.id)
+
+      const merchant = this.state.merchants[shock.merchantId]
+      if (!merchant) continue
+      const beforeCash = merchant.cash
+      const beforeStock = totalStock(merchant)
+      let itemId: ItemId | null = null
+      let quantity: number | null = null
+      let unitPrice: number | null = null
+      let spent = 0
+
+      if (shock.kind === 'cash-drain') {
+        spent = Math.min(merchant.cash, Math.max(0, shock.amount ?? 0))
+        merchant.cash = roundMoney(merchant.cash - spent, this.config)
+      } else {
+        const item = shock.itemId ? this.config.items[shock.itemId] : undefined
+        if (!item) continue
+        const offered = Math.max(0, Math.floor(shock.quantity ?? 0))
+        const price = shock.unitPrice ?? item.baseValue
+        const fill =
+          price > 0
+            ? Math.min(offered, Math.floor((merchant.cash + 1e-9) / price))
+            : 0
+        if (fill > 0) {
+          spent = roundMoney(fill * price, this.config)
+          merchant.cash = roundMoney(merchant.cash - spent, this.config)
+          merchant.stock[item.id] = (merchant.stock[item.id] ?? 0) + fill
+          itemId = item.id
+          quantity = fill
+          unitPrice = price
+        }
+      }
+
+      const payment =
+        itemId !== null && quantity !== null && unitPrice !== null
+          ? `${merchant.displayName} bought ${quantity} ${this.config.items[itemId]?.displayName ?? itemId} at ${this.money(unitPrice)} each (${this.money(spent)}),`
+          : `${merchant.displayName} paid ${this.money(spent)},`
+      this.recordSink('shocks', spent)
+      this.emit(
+        {
+          time: this.state.time,
+          type: 'system.shock',
+          actor: { type: 'system', id: 'scenario', displayName: 'Town scenario' },
+          item: itemId,
+          quantity,
+          price: unitPrice,
+          before: { stock: beforeStock, cash: beforeCash, bid: null, ask: null },
+          after: {
+            stock: totalStock(merchant),
+            cash: merchant.cash,
+            bid: null,
+            ask: null,
+          },
+          reasons: [
+            {
+              code: 'shock',
+              label: 'Scenario shock',
+              value: 1,
+              effect: -spent,
+              detail: shock.id,
+            },
+            {
+              code: 'merchant-cash',
+              label: 'Merchant cash after shock',
+              value: merchant.cash,
+              effect: 0,
+              detail: `${merchant.displayName} reserve ${this.money(merchant.reserve)}`,
+            },
+          ],
+          cause: 'shock',
+          causeId: shock.id,
+          message: `${shock.message} ${payment} leaving ${this.money(merchant.cash)} against a ${this.money(merchant.reserve)} reserve.`,
+        },
+        events,
+      )
+    }
+  }
+
+  private applyDueScenarioRescues(events: SequencedMarketEvent[]): void {
+    const investor = this.config.scenario.investor
+    if (!investor) return
+
+    for (const shock of this.config.scenario.shocks) {
+      const rescue = shock.rescue
+      if (!rescue) continue
+      if (this.state.scenario.rescues.some(record => record.shockId === shock.id)) continue
+
+      const merchant = this.state.merchants[shock.merchantId]
+      if (!merchant || !merchant.bankrupt || merchant.bankruptAt === null) continue
+      if (this.state.time + 1e-9 < merchant.bankruptAt + rescue.delaySeconds) continue
+
+      const player = this.ensureScenarioInvestor(rescue.investorId, investor.displayName, investor.cash, events)
+      const amount = roundMoney(rescue.amount, this.config)
+      if (amount <= 0 || player.cash + 1e-9 < amount) continue
+
+      const investment = this.investInMerchant(player, merchant, amount, events)
+      this.state.scenario.rescues.push({
+        shockId: shock.id,
+        investorId: player.id,
+        investmentId: investment.id,
+        at: this.state.time,
+      })
+    }
+  }
+
+  private ensureScenarioInvestor(
+    playerId: string,
+    displayName: string,
+    cash: number,
+    events: SequencedMarketEvent[],
+  ): PlayerRuntimeState {
+    const existing = this.state.players[playerId]
+    if (existing) return existing
+
+    const player: PlayerRuntimeState = {
+      id: playerId,
+      displayName,
+      cash: roundMoney(cash, this.config),
+      inventory: {},
+      stamina: this.config.player.stamina.max,
+      maxStamina: this.config.player.stamina.max,
+      joinedAt: this.state.time,
+    }
+    this.state.players[playerId] = player
+    this.emit(
+      {
+        time: this.state.time,
+        type: 'player.join',
+        actor: { type: 'player', id: player.id, displayName: player.displayName },
+        item: null,
+        quantity: null,
+        price: null,
+        before: EMPTY_SNAPSHOT(),
+        after: { stock: null, cash: player.cash, bid: null, ask: null },
+        reasons: [
+          {
+            code: 'scenario-investor',
+            label: 'Scenario investor capital',
+            value: player.cash,
+            effect: 0,
+            detail: 'Funds a scheduled rescue investment',
+          },
+        ],
+        cause: 'configuration',
+        causeId: `scenario-investor-${player.id}`,
+        message: `${player.displayName} arrived with ${this.money(player.cash)} to back a closed stall.`,
+      },
+      events,
+    )
+    return player
   }
 
   private respawnResources(events: SequencedMarketEvent[]): void {
@@ -1850,6 +2033,16 @@ export class EconomyEngine {
 
   private runBot(bot: BotRuntimeState, events: SequencedMarketEvent[]): void {
     const behavior = this.config.bots.behavior
+    const orderBoard = this.config.orders.botParticipation
+    if (orderBoard.enabled && this.random() < orderBoard.chance) {
+      if (this.tryBotOrder(bot, events)) {
+        bot.lastActionAt = this.state.time
+        bot.nextActionAt =
+          this.state.time + behavior.cadenceSeconds + this.randomInt(0, behavior.jitterSeconds)
+        return
+      }
+    }
+
     const roll = this.random()
     let side: TradeSide | null =
       roll < behavior.buyProbability
@@ -1930,6 +2123,89 @@ export class EconomyEngine {
         cause: 'gather',
         causeId: `bot-work-${bot.id}-${this.state.sequence + 1}`,
         message: `${bot.displayName} worked ${config.displayName} and gathered ${quantity} ${item.displayName}.`,
+      },
+      events,
+    )
+    return true
+  }
+
+  /**
+   * Bots may deliver to guild orders. This is the only automated order path:
+   * player accept/fulfill remains unchanged and player-accepted orders are
+   * never touched by bots.
+   */
+  private tryBotOrder(bot: BotRuntimeState, events: SequencedMarketEvent[]): boolean {
+    const participation = this.config.orders.botParticipation
+    if (!participation.enabled) return false
+    const candidates = this.state.orders
+      .filter(
+        order =>
+          order.status === 'open' &&
+          order.expiresAt > this.state.time &&
+          Boolean(this.config.items[order.itemId]) &&
+          (bot.inventory[order.itemId] ?? 0) > 0,
+      )
+      .sort((left, right) => stableCompare(left.id, right.id))
+    if (candidates.length === 0) return false
+
+    const order = candidates[this.randomInt(0, candidates.length - 1)]
+    const available = Math.min(
+      Math.floor(bot.inventory[order.itemId] ?? 0),
+      order.remaining,
+      participation.maxUnitsPerDelivery,
+    )
+    if (available <= 0) return false
+    const count = this.randomInt(1, available)
+    const item = this.config.items[order.itemId]
+    const paid = roundMoney(order.unitReward * count, this.config)
+    const beforeStock = bot.inventory[order.itemId] ?? 0
+    const beforeCash = bot.cash
+
+    bot.inventory[order.itemId] = Math.max(0, beforeStock - count)
+    bot.cash = roundMoney(bot.cash + paid, this.config)
+    order.remaining -= count
+    order.updatedAt = this.state.time
+    if (order.remaining === 0) {
+      order.status = 'fulfilled'
+      order.fulfilledAt = this.state.time
+    }
+
+    this.state.stats.ordersFulfilled += count
+    this.state.stats.orderUnits += count
+    this.state.stats.orderPayouts = roundMoney(this.state.stats.orderPayouts + paid, this.config)
+    this.state.stats.sources.orderPayouts = roundMoney(
+      this.state.stats.sources.orderPayouts + paid,
+      this.config,
+    )
+    this.state.daily.orders.fulfilled += count
+    this.state.daily.orders.units += count
+    this.state.daily.orders.payouts = roundMoney(
+      this.state.daily.orders.payouts + paid,
+      this.config,
+    )
+
+    this.emit(
+      {
+        time: this.state.time,
+        type: 'order.fulfilled',
+        actor: { type: 'bot', id: bot.id, displayName: bot.displayName },
+        item: order.itemId,
+        quantity: count,
+        price: order.unitReward,
+        before: { stock: beforeStock, cash: beforeCash, bid: null, ask: null },
+        after: { stock: bot.inventory[order.itemId] ?? 0, cash: bot.cash, bid: null, ask: null },
+        reasons: [
+          {
+            code: 'order',
+            label: 'Bot order delivery',
+            value: count,
+            effect: paid,
+            detail: `${order.remaining} unit(s) left for ${order.issuer}`,
+          },
+        ],
+        cause: 'order',
+        causeId: order.id,
+        message: `${bot.displayName} delivered ${count} ${item?.displayName ?? order.itemId} to ${order.issuer} for ${this.money(paid)}.`,
       },
       events,
     )
@@ -2716,7 +2992,7 @@ export class EconomyEngine {
     return 0
   }
 
-  private recordSink(kind: 'rent' | 'salesTax' | 'repairs', amount: number): void {
+  private recordSink(kind: 'rent' | 'salesTax' | 'repairs' | 'shocks', amount: number): void {
     if (amount <= 0) return
     this.state.stats.sinks[kind] = roundMoney(this.state.stats.sinks[kind] + amount, this.config)
     this.state.stats.sinks.total = roundMoney(

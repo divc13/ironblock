@@ -26,6 +26,22 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173).
 
+The default economy config runs the deterministic `demoScenario` story. To run the
+stable sandbox economy instead, use the exported switch:
+
+```ts
+import { economy, stableSandboxScenario } from './src/config/economy'
+import type { EconomyConfig } from './src/shared/types'
+
+const config: EconomyConfig = {
+  ...economy,
+  scenario: stableSandboxScenario,
+}
+```
+
+`npm run sim` uses the default demo scenario and prints bankruptcies, rescue
+investments, order deliveries, caravan impact and top movers.
+
 Production build and smoke test:
 
 ```bash

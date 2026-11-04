@@ -12,6 +12,11 @@ const quietConfig = (): EconomyConfig => {
   const config = cloneConfig()
   config.bots.count = 0
   config.caravan.intervalSeconds = 365 * 86400
+  config.scenario = {
+    id: 'test-quiet',
+    description: 'Isolated test economy without demo story beats.',
+    shocks: [],
+  }
   return config
 }
 

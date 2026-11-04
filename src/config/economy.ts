@@ -1,4 +1,56 @@
-import type { EconomyConfig } from '../shared/types'
+import type { EconomyConfig, ScenarioConfig } from '../shared/types'
+
+/**
+ * Hackathon demo story. The default game uses this scenario so a fresh
+ * seven-day fast-forward shows a bankruptcy, a guild rescue investment and
+ * an unresolved stall that the player can reopen themselves.
+ */
+export const demoScenario: ScenarioConfig = {
+  id: 'demo-breakdown-and-rescue',
+  description:
+    'A speculative timber deal and a loom breakdown create two visible cash crises; the Guild Factor rescues the first stall.',
+  investor: {
+    id: 'guild-factor',
+    displayName: 'Guild Factor',
+    cash: 600,
+  },
+  shocks: [
+    {
+      id: 'timberly-speculative-timber-load',
+      day: 2,
+      atSecond: 9 * 3600,
+      merchantId: 'timberly',
+      kind: 'bulk-purchase',
+      itemId: 'timber',
+      quantity: 200,
+      unitPrice: 8.5,
+      message:
+        'A caravan offered a rare hardwood load at a premium; Timberly bought as much as its cash allowed to undercut rivals.',
+      rescue: {
+        investorId: 'guild-factor',
+        amount: 120,
+        delaySeconds: 6 * 3600,
+      },
+    },
+    {
+      id: 'weaver-loom-breakdown',
+      day: 5,
+      atSecond: 12 * 3600,
+      merchantId: 'weaver',
+      kind: 'cash-drain',
+      amount: 1000,
+      message:
+        "Weaver's loom broke down and the emergency repair bill consumed every coin the stall had.",
+    },
+  ],
+}
+
+/** Stable economy without scheduled shocks or a rescue investor. */
+export const stableSandboxScenario: ScenarioConfig = {
+  id: 'sandbox',
+  description: 'Stable sandbox economy with no scheduled shocks or rescues.',
+  shocks: [],
+}
 
 /**
  * Ironblock economy configuration.
@@ -694,8 +746,8 @@ export const economy = {
   },
 
   orders: {
-    maxActive: 4,
-    cadenceDays: 2,
+    maxActive: 6,
+    cadenceDays: 1,
     expiryDays: 3,
     rewardMultiplier: { min: 1.15, max: 1.55 },
     templates: [
@@ -736,10 +788,17 @@ export const economy = {
         quantityRange: { min: 8, max: 14 },
       },
     ],
+    botParticipation: {
+      enabled: true,
+      chance: 0.65,
+      maxUnitsPerDelivery: 6,
+    },
   },
 
+  scenario: demoScenario,
+
   reporting: {
-    eventRetention: 5000,
+    eventRetention: 25000,
     summaryRetentionDays: 30,
     topMovers: 5,
     eventSampleSize: 60,

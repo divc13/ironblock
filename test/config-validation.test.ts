@@ -143,6 +143,35 @@ test('config validation rejects items without a buyer', () => {
   )
 })
 
+test('config validation checks scenario merchant and item references', () => {
+  const invalid = cloneEconomy()
+  invalid.scenario.shocks[0].merchantId = 'missing-stall'
+
+  assert.throws(
+    () => validateEconomyConfig(invalid),
+    error =>
+      hasIssue(
+        error,
+        /scenario\.shocks\[0\]\.merchantId.*unknown merchant id "missing-stall"/,
+      ),
+  )
+})
+
+test('config validation requires scheduled rescues to be funded by the scenario investor', () => {
+  const invalid = cloneEconomy()
+  assert.ok(invalid.scenario.investor)
+  invalid.scenario.investor.cash = 50
+
+  assert.throws(
+    () => validateEconomyConfig(invalid),
+    error =>
+      hasIssue(
+        error,
+        /scenario\.investor\.cash.*cannot fund scheduled rescues/,
+      ),
+  )
+})
+
 test('checkEconomyConfig reports issues without throwing', () => {
   const invalid = cloneEconomy()
   invalid.personalities.balanced.stockSensitivity = -1
