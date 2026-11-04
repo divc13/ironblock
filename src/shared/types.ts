@@ -553,6 +553,7 @@ export type EventCauseType =
   | 'order'
   | 'use'
   | 'shock'
+  | 'withdrawal'
 
 export type MarketEventType =
   | 'trade.buy'
@@ -581,6 +582,7 @@ export type MarketEventType =
   | 'order.fulfilled'
   | 'order.expired'
   | 'system.shock'
+  | 'player.withdraw'
 
 export interface EventActor {
   type: EventActorType

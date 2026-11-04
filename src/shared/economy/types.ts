@@ -288,6 +288,12 @@ export interface GatherActionData {
   toolDurability: number | null
 }
 
+export interface WithdrawActionData {
+  itemId: ItemId
+  quantity: number
+  remaining: number
+}
+
 export interface CraftActionData {
   recipeId: RecipeId
   quantity: number
