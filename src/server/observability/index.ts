@@ -18,6 +18,11 @@
 export { startMarketStream, type MarketStreamOptions } from './sse'
 export { asObservabilitySource } from './source'
 export {
+  createObservabilityNodeHandler,
+  resolveSpectatorFile,
+  type ObservabilityNodeMountOptions,
+} from './node-mount'
+export {
   createObservabilityMiddleware,
   type ConnectMiddleware,
   type MiddlewareOptions,
