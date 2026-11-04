@@ -3,11 +3,9 @@ import type { SequencedMarketEvent } from '../shared/economy'
 import { validateEconomyConfig } from '../shared/config-validation'
 import { economy as economyData } from '../config/economy'
 import type { EconomyConfig } from '../shared/types'
-import {
-  buildProofPayload,
-  runFastForwardClone,
-  sanitizeSpectatorSnapshot,
-} from '../server/observability'
+import { buildProofPayload } from '../server/observability/proof'
+import { runFastForwardClone } from '../server/observability/fastforward'
+import { sanitizeSpectatorSnapshot } from '../server/observability/sanitize'
 import type { FastForwardClonePayload, ProofPayload, PublicSnapshot } from '../server/observability'
 
 /**

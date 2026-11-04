@@ -4,7 +4,10 @@ import { randomBytes } from 'node:crypto';
 import startServer from './src/server';
 import { nearAuthApiPlugin } from './src/server/auth/vite-plugin';
 import { economyApiPlugin } from './src/server/economy/vite-plugin';
-import { observabilityApiPlugin } from './src/server/observability';
+import {
+  observabilityApiPlugin,
+  spectatorStandalonePlugin,
+} from './src/server/observability';
 import { settlementApiPlugin } from './src/server/settlement/vite-plugin';
 import { loadSettlementConfig } from './src/server/settlement/config';
 import { createLazyEconomySettlementLedger } from './src/server/settlement/economy-ledger';
@@ -82,6 +85,11 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       strictPort: true,
     },
+    // `vite preview` reads the client output directory from here; RPGJS emits
+    // the browser build to dist/client, not Vite's default dist.
+    build: {
+      outDir: 'dist/client',
+    },
     optimizeDeps: {
       include: ['pixi.js > @xmldom/xmldom']
     },
@@ -107,7 +115,10 @@ export default defineConfig(({ mode }) => {
             },
           },
         },
-      })
+      }),
+      // Must stay after rpgjs(): its HTML pre-transform rewrites every module
+      // script to the game client, which would otherwise hijack spectator.html.
+      spectatorStandalonePlugin(),
     ],
   };
 });

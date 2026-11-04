@@ -53,7 +53,9 @@ export {
 } from './sanitize'
 export {
   observabilityApiPlugin,
+  spectatorStandalonePlugin,
   DEFAULT_SPECTATOR_PATH,
+  SPECTATOR_ENTRY,
   type ObservabilityPluginOptions,
 } from './vite-plugin'
 export type * from './types'

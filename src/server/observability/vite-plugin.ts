@@ -1,5 +1,6 @@
+import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { Plugin, PreviewServer, ViteDevServer } from 'vite'
+import type { Plugin, PreviewServer, ResolvedConfig, ViteDevServer } from 'vite'
 import { createObservabilityMiddleware } from './http'
 import {
   apiPathFromEnv,
@@ -22,6 +23,9 @@ export interface ObservabilityPluginOptions
 }
 
 export const DEFAULT_SPECTATOR_PATH = '/spectator'
+
+/** Browser entry for the standalone dashboard (kept out of the game bundle). */
+export const SPECTATOR_ENTRY = './src/spectator/main.ts'
 
 const normalizeSegment = (value: string): string =>
   `/${value.replace(/^\/+|\/+$/g, '')}`.replace(/\/+$/, '') || ''
@@ -131,6 +135,67 @@ export function observabilityApiPlugin(options: ObservabilityPluginOptions = {})
           getService: () => ensureService().then(asObservabilitySource),
         }),
       )
+    },
+  }
+}
+
+/**
+ * Keeps `spectator.html` independent from the RPGJS game client.
+ *
+ * `@rpgjs/vite`'s entry-point plugin runs as an HTML `pre` transform and
+ * rewrites *every* module script in *every* HTML entry to the game client. That
+ * is correct for `index.html`, but makes the dashboard boot the canvas game.
+ * Register this plugin after `rpgjs()` so its `pre` hook runs last and restores
+ * the dashboard entry before Vite collects module scripts. The spectator then
+ * gets its own JS chunk in the same build, with no separate build step.
+ */
+export function spectatorStandalonePlugin(): Plugin {
+  let resolvedConfig: ResolvedConfig | null = null
+
+  return {
+    name: 'ironblock:spectator-standalone',
+    configResolved(config) {
+      resolvedConfig = config
+    },
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html, context) {
+        const filename = context.filename.replace(/\\/g, '/')
+        if (!filename.endsWith('/spectator.html')) return html
+        return html.replace(
+          /<script\s+type="module"\s+src="[^"]*"[^>]*><\/script>/gi,
+          `<script type="module" src="${SPECTATOR_ENTRY}"></script>`,
+        )
+      },
+    },
+    async closeBundle() {
+      if (!resolvedConfig || resolvedConfig.command !== 'build') return
+
+      const builtPage = resolve(
+        resolvedConfig.root,
+        resolvedConfig.build.outDir,
+        'spectator.html',
+      )
+      const html = await readFile(builtPage, 'utf8')
+      const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)].map(
+        match => match[1],
+      )
+
+      if (/(?:canvasengine|\/client-)/i.test(html)) {
+        throw new Error(
+          `[ironblock] ${builtPage} still loads the RPGJS game client; ` +
+            'spectator.html must stay independent of the game bundle.',
+        )
+      }
+      if (
+        scripts.length === 0 ||
+        !scripts.some(src => /\/assets\/spectator-[^/]+\.js$/i.test(src))
+      ) {
+        throw new Error(
+          `[ironblock] ${builtPage} has no spectator bundle ` +
+            `(scripts: ${scripts.join(', ') || 'none'}).`,
+        )
+      }
     },
   }
 }
