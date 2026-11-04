@@ -1,0 +1,62 @@
+{
+  "network": "testnet",
+  "status": "final",
+  "contract_account_id": "v2.ironblock-items.testnet",
+  "owner_account_id": "v2.ironblock-items.testnet",
+  "treasury_account_id": "v2.ironblock-treasury.testnet",
+  "recorded_at": "2026-11-04",
+  "genesis_minted": true,
+  "token_count": 13,
+  "total_genesis_supply": "533000",
+  "wasm_sha256": "51e745dadd1921fd9ea4e1f52f6112bc948da96fbcad2c106bb91e884cec95c4",
+  "wasm_size_bytes": 253936,
+  "supersedes": {
+    "contract_account_id": "ironblock-items.testnet",
+    "treasury_account_id": "ironblock-treasury.testnet",
+    "token_count": 11
+  },
+  "transactions": {
+    "create_contract_account": "7mkJ6SY695oUhaqq5AnuxTX7c4RMh2tCHEeVgR1sxvaW",
+    "create_treasury_account": "HuLqWFtUR1kwUVGi5cfT4rCXtn2Cq5sBU75ZXvAgRP9j",
+    "deploy_and_init": "BxKHVgr4v7szRQsieGHJiT2HjYuz6BC2P1T8NM8DVoWd",
+    "mint_genesis": "2N4JBAHRuLaFJVi5g1JnmzLZDZpSuXKsKYt9nsRgUfHk",
+    "implicit_account_smoke_transfer": "3DTv9uJQrADyMgqrztg5awhKpBQojWdchJTHosx52Q5r"
+  },
+  "implicit_account_smoke_test": {
+    "receiver_id": "f09b12705f578af820d22da5a5f1bca10ae5fe25cd1a645da6953e2cc5730a57",
+    "token_id": "bread",
+    "amount": "1",
+    "memo": "settlement-smoke",
+    "receiver_registration_required": false
+  },
+  "treasury_balances": {
+    "iron_ore": "100000",
+    "iron_ingot": "25000",
+    "grain": "100000",
+    "flour": "25000",
+    "timber": "100000",
+    "plank": "25000",
+    "wool": "100000",
+    "cloth": "25000",
+    "pickaxe": "1000",
+    "hoe": "1000",
+    "axe": "1000",
+    "bread": "24999",
+    "cloak": "5000"
+  },
+  "tokens": [
+    { "token_id": "iron_ore", "name": "Iron Ore", "symbol": "IORE", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "iron_ingot", "name": "Iron Ingot", "symbol": "IING", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "grain", "name": "Grain", "symbol": "GRN", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "flour", "name": "Flour", "symbol": "FLR", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "timber", "name": "Timber", "symbol": "TMB", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "plank", "name": "Plank", "symbol": "PLK", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "wool", "name": "Wool", "symbol": "WOL", "decimals": 0, "genesis_supply": "100000" },
+    { "token_id": "cloth", "name": "Cloth", "symbol": "CLT", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "pickaxe", "name": "Pickaxe", "symbol": "PCK", "decimals": 0, "genesis_supply": "1000" },
+    { "token_id": "hoe", "name": "Hoe", "symbol": "HOE", "decimals": 0, "genesis_supply": "1000" },
+    { "token_id": "axe", "name": "Axe", "symbol": "AXE", "decimals": 0, "genesis_supply": "1000" },
+    { "token_id": "bread", "name": "Bread", "symbol": "BREAD", "decimals": 0, "genesis_supply": "25000" },
+    { "token_id": "cloak", "name": "Cloak", "symbol": "CLOAK", "decimals": 0, "genesis_supply": "5000" }
+  ]
+}

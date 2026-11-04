@@ -1,5 +1,5 @@
 import { provideClientGlobalConfig, provideClientModules, Presets } from "@rpgjs/client";
-import { provideMain } from "../modules/main";
+import mainClient from "../modules/main/client";
 import { provideTiledMap } from "@rpgjs/tiledmap/client";
 
 export default {
@@ -8,8 +8,11 @@ export default {
       basePath: "map",
     }),
     provideClientGlobalConfig(),
-    provideMain(),
+    // The server main module (maps and auth hooks) stays server-only; the
+    // client main module mounts the economy HUD/overlay bridge and reacts to
+    // the authoritative server's map data after login.
     provideClientModules([
+      mainClient,
       {
         spritesheets: [
           {
