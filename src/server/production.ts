@@ -14,6 +14,7 @@ import { loadServerAuthConfig, type ServerAuthConfig } from "./auth/config";
 import { createNearAuthHttpHandler } from "./auth/http";
 import { defaultAuthStore, verifyActiveGameSession } from "./auth/service";
 import { createEconomyHttpHandler } from "./economy/http";
+import { startLiveEconomy, stopLiveEconomy } from "./economy/live";
 import { startEconomyService } from "./economy/runtime";
 import { createObservabilityNodeHandler } from "./observability/node-mount";
 import { asObservabilitySource } from "./observability/source";
@@ -77,6 +78,10 @@ export async function startProductionServer(
   // Start the shared singleton before settlement binds its ledger. The game
   // transport reuses this same instance, so withdrawals debit live inventory.
   const economyService = await startEconomyService();
+
+  // One recursive-timer live market loop for this process. In test runners the
+  // starter is a no-op, so `npm test` leaves no background simulation running.
+  startLiveEconomy(economyService);
 
   // Settlement shares the verified session store so a login from /api/auth is
   // honoured here without re-verifying Auth0. Missing/invalid settlement env or
@@ -196,6 +201,8 @@ export async function startProductionServer(
   return {
     url,
     async close() {
+      // Stop scheduling before sockets close, then persist the final world once.
+      await stopLiveEconomy();
       for (const client of wsServer.clients) client.terminate();
       await new Promise<void>((resolveClose) => wsServer.close(() => resolveClose()));
       await new Promise<void>((resolveClose, rejectClose) => {

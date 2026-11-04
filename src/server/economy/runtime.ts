@@ -1,5 +1,6 @@
 import { validatedEconomy } from '../../config/config.server'
 import type { EconomyConfig } from '../../shared/types'
+import { liveEconomyAutoStartAllowed, startLiveEconomy } from './live'
 import { JsonEconomyStore } from './persistence'
 import { EconomyService } from './service'
 
@@ -40,6 +41,24 @@ export async function startEconomyService(
   } finally {
     if (startingService === pending) startingService = null
   }
+}
+
+/**
+ * Start the authoritative service plus its process-wide live loop.
+ *
+ * This is the host entry point for Vite dev/preview. It returns `null` inside
+ * test runners so unit tests never create background timers or write a world.
+ * Production starts the service explicitly and calls `startLiveEconomy()`
+ * itself, sharing the same singleton loop.
+ */
+export async function ensureLiveEconomy(
+  options: StartEconomyOptions = {},
+): Promise<EconomyService | null> {
+  if (!liveEconomyAutoStartAllowed()) return null
+
+  const service = await startEconomyService(options)
+  startLiveEconomy(service)
+  return service
 }
 
 export function getEconomyServiceOrNull(): EconomyService | null {

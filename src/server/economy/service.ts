@@ -220,6 +220,17 @@ export class EconomyService {
     return this.runAction(() => this.current.tick(seconds))
   }
 
+  /**
+   * Advances the live world without writing the whole state to disk.
+   *
+   * It uses the same serialized action queue as `tick`, `fastForward` and all
+   * player actions, so a live tick can never mutate concurrently with them.
+   * The live loop debounces `flush()` separately.
+   */
+  tickLive(seconds?: number): Promise<EconomyActionResult<TickActionData>> {
+    return this.enqueue(() => this.current.tick(seconds))
+  }
+
   fastForward(days?: number): Promise<EconomyFastForwardResult> {
     return this.enqueue(async () => {
       const result = this.current.fastForward(days)

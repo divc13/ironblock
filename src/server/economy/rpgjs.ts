@@ -1,5 +1,6 @@
 import { defineModule } from '@rpgjs/common'
 import type { RpgPlayer, RpgServer, RpgServerEngine } from '@rpgjs/server'
+import { startLiveEconomy } from './live'
 import type { EconomyService } from './service'
 import { getEconomyServiceOrNull, startEconomyService } from './runtime'
 
@@ -14,9 +15,9 @@ type EconomyServer = RpgServerEngine & {
  * Server-only RPGJS module.
  *
  * It starts the persisted world when the engine starts and exposes it on the
- * server instance. It deliberately does not advance economy time from the
- * realtime frame hook: the world/time owner should call `service.tick(seconds)`
- * at the cadence it wants, which keeps fast-forward and live play deterministic.
+ * server instance. The live loop (shared with the production/Vite hosts) then
+ * advances `service.tick()` every real second; explicit `tick()` and
+ * `fastForward()` calls remain serialized through the same service queue.
  */
 export const economyServerModule = defineModule<RpgServer>({
   engine: {
@@ -27,11 +28,12 @@ export const economyServerModule = defineModule<RpgServer>({
       if (typeof process === 'undefined' || !process.versions?.node) return
 
       const service = await startEconomyService()
+      startLiveEconomy(service)
       ;(server as EconomyServer)[ECONOMY_SERVER_PROPERTY] = service
     },
     onStep() {
-      // Intentionally empty. Economy simulation time is advanced explicitly via
-      // EconomyService.tick() or EconomyService.fastForward(), not per render frame.
+      // Economy time is owned by the live timer, not the render frame. Keeping
+      // this empty means frame rate can never change simulation speed.
     },
   },
   player: {
