@@ -1,11 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadServerAuthConfig, type ServerAuthConfig } from "./config";
 import { AuthError, toAuthError } from "./errors";
+import {
+  InMemoryNearAuthRateLimiter,
+  loadNearAuthRateLimitOptions,
+} from "./rate-limit";
 import { verifyGameSessionToken } from "./session";
 import {
   authenticateNearLogin,
   defaultAuthStore,
   describeGameSession,
+  revokeGameSession,
   type AuthenticateNearLoginDeps,
 } from "./service";
 import { InMemoryAuthStore } from "./store";
@@ -16,27 +21,44 @@ export interface NearAuthHttpOptions {
   config?: ServerAuthConfig;
   store?: InMemoryAuthStore;
   /** Test seam for JWKS / MPC lookups. */
-  authDeps?: Omit<AuthenticateNearLoginDeps, "store">;
+  authDeps?: Omit<AuthenticateNearLoginDeps, "store" | "withSubjectLimit">;
+  /** Share a limiter between routes/tests; `false` disables it for a test. */
+  rateLimiter?: InMemoryNearAuthRateLimiter | false;
 }
 
 const MAX_BODY_BYTES = 16 * 1024;
 
 /**
- * Dev-server API for the login spike:
+ * Auth API for the login spike:
  *
- *   POST /api/auth/near     verify Auth0 JWT + MPC-derived NEAR key, issue session
- *   GET  /api/auth/session  validate a stored game session for page reloads
+ *   GET  /api/auth/health  configuration health check
+ *   POST /api/auth/near    verify Auth0 JWT + MPC key, issue session
+ *   GET  /api/auth/session validate a stored session for page reloads
+ *   POST /api/auth/logout  revoke the supplied game session
  *
- * Mounted by `nearAuthApiPlugin()` in Vite. The production game server will
- * need the same two routes on its own HTTP host.
+ * Mounted by `nearAuthApiPlugin()` in Vite dev/preview and by the production
+ * Node host. The same store is used by RPGJS WebSocket authentication.
  */
 export function createNearAuthHttpHandler(
   options: NearAuthHttpOptions = {},
 ): (req: IncomingMessage, res: ServerResponse, next: Next) => void {
   const store = options.store ?? defaultAuthStore;
+  const limiter =
+    options.rateLimiter === false
+      ? undefined
+      : options.rateLimiter ??
+        new InMemoryNearAuthRateLimiter(loadNearAuthRateLimitOptions());
 
   return (req, res, next) => {
-    void handleRequest(req, res, next, options.config, store, options.authDeps);
+    void handleRequest(
+      req,
+      res,
+      next,
+      options.config,
+      store,
+      options.authDeps,
+      limiter,
+    );
   };
 }
 
@@ -47,32 +69,61 @@ async function handleRequest(
   configured: ServerAuthConfig | undefined,
   store: InMemoryAuthStore,
   authDeps: NearAuthHttpOptions["authDeps"],
+  limiter: InMemoryNearAuthRateLimiter | undefined,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const route = normalizeRoute(url.pathname);
 
   if (!route) {
-    next();
+    if (isAuthPath(url.pathname)) {
+      sendJson(res, 404, {
+        error: { code: "NOT_FOUND", message: "Auth route not found" },
+      });
+    } else {
+      next();
+    }
     return;
   }
 
   res.setHeader("cache-control", "no-store");
   res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("referrer-policy", "no-referrer");
 
   try {
     const config = configured ?? loadConfiguredAuth();
 
+    if (route === "/health" && req.method === "GET") {
+      sendJson(res, 200, {
+        status: "ok",
+        service: "near-auth",
+        network: "testnet",
+      });
+      return;
+    }
+
     if (route === "/near" && req.method === "POST") {
-      requireJson(req);
-      const body = await readJsonBody(req);
-      const result = await authenticateNearLogin(
-        {
-          accessToken: readString(body, "accessToken"),
-          nearPublicKey: readString(body, "nearPublicKey"),
-        },
-        config,
-        { ...authDeps, store },
-      );
+      const run = async () => {
+        requireJson(req);
+        const body = await readJsonBody(req);
+        return authenticateNearLogin(
+          {
+            accessToken: readString(body, "accessToken"),
+            nearPublicKey: readString(body, "nearPublicKey"),
+          },
+          config,
+          {
+            ...authDeps,
+            store,
+            withSubjectLimit: limiter
+              ? (subject, task) => limiter.withSubject(subject, task)
+              : undefined,
+          },
+        );
+      };
+
+      const result = limiter
+        ? await limiter.withIp(clientAddress(req), run)
+        : await run();
       sendJson(res, 200, result);
       return;
     }
@@ -87,7 +138,18 @@ async function handleRequest(
       return;
     }
 
-    if ((route === "/near" || route === "/session") && req.method !== "OPTIONS") {
+    if (route === "/logout" && req.method === "POST") {
+      const token = readBearerToken(req);
+      if (!token) {
+        throw new AuthError("SESSION_INVALID", 401, "Missing game session");
+      }
+      await revokeGameSession(token, config, store);
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (req.method !== "OPTIONS") {
       sendJson(res, 405, {
         error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed" },
       });
@@ -120,10 +182,24 @@ function loadConfiguredAuth(): ServerAuthConfig {
   }
 }
 
-function normalizeRoute(pathname: string): "/near" | "/session" | null {
-  const path = pathname.replace(/^\/api\/auth/, "") || "/";
-  if (path === "/near") return "/near";
-  if (path === "/session") return "/session";
+function isAuthPath(pathname: string): boolean {
+  return pathname === "/api/auth" || pathname.includes("/api/auth/");
+}
+
+function normalizeRoute(
+  pathname: string,
+): "/health" | "/near" | "/session" | "/logout" | null {
+  const marker = "/api/auth";
+  const markerIndex = pathname.indexOf(marker);
+  const routePath =
+    markerIndex >= 0
+      ? pathname.slice(markerIndex + marker.length) || "/"
+      : pathname;
+
+  if (routePath === "/health") return "/health";
+  if (routePath === "/near") return "/near";
+  if (routePath === "/session") return "/session";
+  if (routePath === "/logout") return "/logout";
   return null;
 }
 
@@ -143,6 +219,12 @@ function readBearerToken(req: IncomingMessage): string | undefined {
   if (!header || Array.isArray(header)) return undefined;
   const match = /^Bearer\s+(.+)$/i.exec(header);
   return match?.[1]?.trim();
+}
+
+function clientAddress(req: IncomingMessage): string {
+  // Do not trust X-Forwarded-For by default. A reverse proxy must be configured
+  // to pass the real client address or apply its own limiter.
+  return req.socket.remoteAddress ?? "unknown";
 }
 
 function readString(body: unknown, key: string): string {

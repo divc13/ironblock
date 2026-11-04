@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { NEAR_AUTH_TESTNET_DEFAULTS } from "../../shared/auth/defaults";
 
 /**
  * Server-only NEAR Auth configuration.
@@ -29,14 +30,6 @@ export interface ServerAuthConfig {
 export const SESSION_ISSUER = "ironblock-near-auth-spike";
 export const SESSION_AUDIENCE = "ironblock-game";
 
-const TESTNET_DEFAULTS = {
-  domain: "login.testnet.fast-auth.com",
-  audience: "auth0.jwt.fast-auth.testnet",
-  rpcUrl: "https://rpc.testnet.near.org",
-  fastAuthContractId: "fast-auth.testnet",
-  mpcContractId: "v1.signer-prod.testnet",
-} as const;
-
 /**
  * Resolve server auth configuration from environment variables.
  *
@@ -47,8 +40,32 @@ const TESTNET_DEFAULTS = {
 export function loadServerAuthConfig(
   env: Record<string, string | undefined> = process.env,
 ): ServerAuthConfig {
-  const domain = env.NEAR_AUTH_DOMAIN ?? TESTNET_DEFAULTS.domain;
+  const domain = normalizeDomain(
+    env.NEAR_AUTH_DOMAIN ?? NEAR_AUTH_TESTNET_DEFAULTS.domain,
+  );
   const issuer = normalizeIssuer(env.NEAR_AUTH_ISSUER, domain);
+  const audience = requireNonEmpty(
+    env.NEAR_AUTH_AUDIENCE ?? NEAR_AUTH_TESTNET_DEFAULTS.audience,
+    "NEAR_AUTH_AUDIENCE",
+  );
+  const jwksUri = requireNonEmpty(
+    env.NEAR_AUTH_JWKS_URL ??
+      `https://${domain}/.well-known/jwks.json`,
+    "NEAR_AUTH_JWKS_URL",
+  );
+  const rpcUrl = requireNonEmpty(
+    env.NEAR_AUTH_RPC_URL ?? NEAR_AUTH_TESTNET_DEFAULTS.rpcUrl,
+    "NEAR_AUTH_RPC_URL",
+  );
+  const fastAuthContractId = requireNonEmpty(
+    env.NEAR_AUTH_FAST_AUTH_CONTRACT_ID ??
+      NEAR_AUTH_TESTNET_DEFAULTS.fastAuthContractId,
+    "NEAR_AUTH_FAST_AUTH_CONTRACT_ID",
+  );
+  const mpcContractId = requireNonEmpty(
+    env.NEAR_AUTH_MPC_CONTRACT_ID ?? NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
+    "NEAR_AUTH_MPC_CONTRACT_ID",
+  );
   const secret = env.NEAR_AUTH_SESSION_SECRET?.trim();
 
   if (!secret || secret.length < 32) {
@@ -63,6 +80,8 @@ export function loadServerAuthConfig(
     );
   }
 
+  validateJwksUri(jwksUri, domain);
+
   const ttl = Number(env.NEAR_AUTH_SESSION_TTL_SECONDS ?? "3600");
   if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86_400) {
     throw new Error("NEAR_AUTH_SESSION_TTL_SECONDS must be between 60 and 86400");
@@ -71,19 +90,71 @@ export function loadServerAuthConfig(
   return {
     domain,
     issuer,
-    audience: env.NEAR_AUTH_AUDIENCE ?? TESTNET_DEFAULTS.audience,
-    jwksUri:
-      env.NEAR_AUTH_JWKS_URL ??
-      `https://${domain}/.well-known/jwks.json`,
-    rpcUrl: env.NEAR_AUTH_RPC_URL ?? TESTNET_DEFAULTS.rpcUrl,
-    fastAuthContractId:
-      env.NEAR_AUTH_FAST_AUTH_CONTRACT_ID ??
-      TESTNET_DEFAULTS.fastAuthContractId,
-    mpcContractId:
-      env.NEAR_AUTH_MPC_CONTRACT_ID ?? TESTNET_DEFAULTS.mpcContractId,
+    audience,
+    jwksUri,
+    rpcUrl,
+    fastAuthContractId,
+    mpcContractId,
     sessionSecret: secret,
     sessionTtlSeconds: Math.floor(ttl),
   };
+}
+
+/**
+ * Fail the build when the browser and server would use different Auth0/MPC
+ * identities. A mismatch produces confusing "invalid audience" or key-mismatch
+ * failures at login time, so catch it before bundling.
+ */
+export function validateClientServerAuthConsistency(
+  server: ServerAuthConfig,
+  env: Record<string, string | undefined>,
+): void {
+  const client = {
+    network:
+      env.VITE_NEAR_AUTH_NETWORK ?? NEAR_AUTH_TESTNET_DEFAULTS.network,
+    domain: normalizeDomain(
+      env.VITE_NEAR_AUTH_DOMAIN ?? NEAR_AUTH_TESTNET_DEFAULTS.domain,
+    ),
+    audience:
+      env.VITE_NEAR_AUTH_AUDIENCE ?? NEAR_AUTH_TESTNET_DEFAULTS.audience,
+    fastAuthContractId:
+      env.VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID ??
+      NEAR_AUTH_TESTNET_DEFAULTS.fastAuthContractId,
+    mpcContractId:
+      env.VITE_NEAR_AUTH_MPC_CONTRACT_ID ??
+      NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
+  };
+
+  const issues: string[] = [];
+  if (client.network !== "testnet") {
+    issues.push("VITE_NEAR_AUTH_NETWORK must be testnet");
+  }
+  if (client.domain !== server.domain) {
+    issues.push(
+      `VITE_NEAR_AUTH_DOMAIN=${client.domain} does not match NEAR_AUTH_DOMAIN=${server.domain}`,
+    );
+  }
+  if (client.audience !== server.audience) {
+    issues.push(
+      `VITE_NEAR_AUTH_AUDIENCE=${client.audience} does not match NEAR_AUTH_AUDIENCE=${server.audience}`,
+    );
+  }
+  if (client.fastAuthContractId !== server.fastAuthContractId) {
+    issues.push(
+      `VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID=${client.fastAuthContractId} does not match NEAR_AUTH_FAST_AUTH_CONTRACT_ID=${server.fastAuthContractId}`,
+    );
+  }
+  if (client.mpcContractId !== server.mpcContractId) {
+    issues.push(
+      `VITE_NEAR_AUTH_MPC_CONTRACT_ID=${client.mpcContractId} does not match NEAR_AUTH_MPC_CONTRACT_ID=${server.mpcContractId}`,
+    );
+  }
+
+  if (issues.length > 0) {
+    throw new Error(
+      `NEAR Auth client/server configuration mismatch:\n- ${issues.join("\n- ")}`,
+    );
+  }
 }
 
 /**
@@ -94,9 +165,50 @@ export function createEphemeralSessionSecret(): string {
   return randomBytes(48).toString("base64url");
 }
 
-function normalizeIssuer(configured: string | undefined, domain: string): string {
-  if (!configured) return `https://${domain}/`;
-  return configured.endsWith("/") ? configured : `${configured}/`;
+function normalizeDomain(raw: string): string {
+  const value = raw.trim();
+  if (!value || value.includes("://") || value.includes("/")) {
+    throw new Error(
+      "NEAR_AUTH_DOMAIN must be a hostname without a scheme or path",
+    );
+  }
+  return value.toLowerCase();
+}
+
+function normalizeIssuer(
+  configured: string | undefined,
+  domain: string,
+): string {
+  const expected = `https://${domain}/`;
+  if (!configured) return expected;
+
+  const normalized = configured.endsWith("/") ? configured : `${configured}/`;
+  if (normalized !== expected) {
+    throw new Error(
+      `NEAR_AUTH_ISSUER must match https://\${NEAR_AUTH_DOMAIN}/ (expected ${expected})`,
+    );
+  }
+  return normalized;
+}
+
+function validateJwksUri(jwksUri: string, domain: string): void {
+  let url: URL;
+  try {
+    url = new URL(jwksUri);
+  } catch {
+    throw new Error("NEAR_AUTH_JWKS_URL must be a valid HTTPS URL");
+  }
+  if (url.protocol !== "https:" || url.host !== domain) {
+    throw new Error(
+      "NEAR_AUTH_JWKS_URL must use HTTPS and the same host as NEAR_AUTH_DOMAIN",
+    );
+  }
+}
+
+function requireNonEmpty(value: string, name: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${name} must not be empty`);
+  return normalized;
 }
 
 function isMainnetDomain(domain: string): boolean {

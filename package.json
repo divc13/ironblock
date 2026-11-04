@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "npm run test:auth && npm run test:production",
+    "start": "node scripts/start-production.mjs",
+    "test": "npm run test:auth && npm run test:production && npm run test:production:auth",
     "test:auth": "vitest run --config vitest.config.ts",
-    "test:production": "RPG_TYPE=rpg node --test test/production-preview.test.mjs"
+    "test:production": "RPG_TYPE=rpg node --test test/production-preview.test.mjs",
+    "test:production:auth": "node --test test/production-auth.test.mjs"
   },
   "keywords": [
     "near",
@@ -21,6 +23,7 @@
   "description": "Ironblock - a small market town with an observable NPC-run economy.",
   "devDependencies": {
     "@canvasengine/compiler": "2.5.0",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-vue": "^6.0.10",
     "path-browserify": "^1.0.1",
     "vite": "^8.3.5",
@@ -43,7 +46,8 @@
     "canvasengine": "2.5.1",
     "jose": "^6.2.15",
     "near-api-js": "^5.1.1",
-    "pixi.js": "^8.22.0"
+    "pixi.js": "^8.22.0",
+    "ws": "^8.22.1"
   },
   "type": "module"
 }

@@ -145,6 +145,20 @@ describe("InMemoryAuthStore", () => {
     store.prune(Date.now() + 3_600_001);
     expect(store.size.sessions).toBe(0);
   });
+
+  it("marks the process authoritative when revoking an unrecorded token", async () => {
+    const auth = await createTestAuth();
+    const issued = await issueGameSession(identity(), auth.config);
+    const store = new InMemoryAuthStore();
+
+    store.revokeSession(issued.claims.sessionId);
+    expect(store.hasRecordedSessions).toBe(true);
+
+    await expectAuthError(
+      describeGameSession(issued.token, auth.config, store),
+      "SESSION_INVALID",
+    );
+  });
 });
 
 describe("authenticateNearLogin", () => {
@@ -186,6 +200,37 @@ describe("authenticateNearLogin", () => {
       store,
     );
     expect(info.player).toEqual(response.player);
+  });
+
+  it("passes the verified Auth0 subject to the MPC rate-limit hook", async () => {
+    const auth = await createTestAuth();
+    const store = new InMemoryAuthStore();
+    const publicKey = makeEd25519PublicKey();
+    const token = await makeAuth0Token(auth, {
+      sub: "auth0|subject-limited",
+    });
+    let limitedSubject = "";
+    let lookupCalled = false;
+
+    await authenticateNearLogin(
+      { accessToken: token, nearPublicKey: publicKey },
+      auth.config,
+      {
+        jwks: auth.jwks,
+        store,
+        withSubjectLimit: async (subject, task) => {
+          limitedSubject = subject;
+          return task();
+        },
+        lookupDerivedPublicKey: async () => {
+          lookupCalled = true;
+          return publicKey;
+        },
+      },
+    );
+
+    expect(limitedSubject).toBe("auth0|subject-limited");
+    expect(lookupCalled).toBe(true);
   });
 
   it("does not issue a session when the NEAR key does not match", async () => {

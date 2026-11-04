@@ -10,6 +10,11 @@ import type {
   NearAuthSessionResponse,
 } from "../../shared/auth/types";
 import { clientNearAuthConfig } from "./config";
+import {
+  createNearAuthSessionCache,
+  isNearAuthSessionResponse,
+} from "./session-cache";
+import { assertMatchingTokenSubjects } from "./token-subject";
 
 /**
  * Auth0's SPA client is private inside the official provider, but the provider
@@ -41,7 +46,7 @@ class IronblockJavascriptProvider extends JavascriptProvider {
    * button; the email button leaves it undefined so the shared tenant decides
    * which email/password or passwordless connections it supports.
    */
-  async loginWithConnection(connection?: string): Promise<void> {
+  async loginWithConnection(connection?: string): Promise<string> {
     await this.auth0.loginWithPopup({
       authorizationParams: {
         ...(connection ? { connection } : {}),
@@ -54,6 +59,7 @@ class IronblockJavascriptProvider extends JavascriptProvider {
     if (!claims?.sub) {
       throw new NearAuthFlowError("Auth0 did not return a stable user identity");
     }
+    return claims.sub;
   }
 
   /** Auth0 access token for the NEAR Auth signing audience. */
@@ -93,6 +99,10 @@ async function getAuth(): Promise<{
     connectionPromise ??= connect({
       networkId: "testnet",
       nodeUrl: clientNearAuthConfig.rpcUrl,
+    }).catch((error: unknown) => {
+      // A transient RPC/startup failure must not poison every later login.
+      connectionPromise = undefined;
+      throw error;
     });
     const near = await connectionPromise;
     client = new FastAuthClient(provider, near.connection, {
@@ -114,8 +124,9 @@ export async function loginWithNearAuth(
 ): Promise<NearAuthSessionResponse> {
   const auth = await getAuth();
 
+  let idTokenSubject: string;
   try {
-    await auth.provider.loginWithConnection(
+    idTokenSubject = await auth.provider.loginWithConnection(
       method === "google" ? "google-oauth2" : undefined,
     );
   } catch (error) {
@@ -125,14 +136,17 @@ export async function loginWithNearAuth(
   let accessToken: string;
   let nearPublicKey: string;
   try {
+    accessToken = await auth.provider.getSigningToken();
+    assertMatchingTokenSubjects(idTokenSubject, accessToken);
     const signer = await auth.client.getSigner();
     nearPublicKey = String(await signer.getPublicKey("ed25519"));
-    accessToken = await auth.provider.getSigningToken();
   } catch (error) {
     throw new NearAuthFlowError(
       error instanceof NearAuthFlowError
         ? error.message
-        : "Signed in, but the NEAR identity could not be derived",
+        : error instanceof Error && error.message.startsWith("Auth0 returned")
+          ? error.message
+          : "Signed in, but the NEAR identity could not be derived",
     );
   }
 
@@ -157,7 +171,7 @@ export async function loginWithNearAuth(
     );
   }
 
-  if (!isSessionResponse(body)) {
+  if (!isNearAuthSessionResponse(body)) {
     throw new NearAuthFlowError("The game server returned an invalid session");
   }
 
@@ -204,54 +218,42 @@ export async function restoreNearAuthSession(): Promise<NearAuthSessionResponse 
   }
 }
 
+const sessionCache = createNearAuthSessionCache(
+  clientNearAuthConfig.sessionStorageKey,
+);
+
 export function saveNearAuthSession(session: NearAuthSessionResponse): void {
-  try {
-    window.sessionStorage.setItem(
-      clientNearAuthConfig.sessionStorageKey,
-      JSON.stringify(session),
-    );
-  } catch {
-    // Storage can be unavailable in private mode; the in-memory flow still works.
-  }
+  sessionCache.save(session);
 }
 
 export function readNearAuthSession(): NearAuthSessionResponse | null {
-  try {
-    const raw = window.sessionStorage.getItem(
-      clientNearAuthConfig.sessionStorageKey,
-    );
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as NearAuthSessionResponse;
-    if (!isSessionResponse(parsed)) return null;
-    if (Date.parse(parsed.expiresAt) <= Date.now()) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  return sessionCache.read() ?? null;
 }
 
 export function clearNearAuthSession(): void {
-  try {
-    window.sessionStorage.removeItem(clientNearAuthConfig.sessionStorageKey);
-  } catch {
-    // Ignore unavailable storage.
-  }
+  sessionCache.clear();
 }
 
-function isSessionResponse(
-  value: unknown,
-): value is NearAuthSessionResponse {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<NearAuthSessionResponse>;
-  return (
-    typeof candidate.sessionToken === "string" &&
-    candidate.sessionToken.length > 40 &&
-    typeof candidate.expiresAt === "string" &&
-    Number.isFinite(Date.parse(candidate.expiresAt)) &&
-    typeof candidate.player?.id === "string" &&
-    typeof candidate.player?.nearPublicKey === "string" &&
-    typeof candidate.player?.nearAccountId === "string"
-  );
+/**
+ * Revoke the current game session on the server and clear the local cache.
+ * The endpoint is available even though the spike does not yet render an
+ * in-game account menu.
+ */
+export async function logoutNearAuthSession(): Promise<void> {
+  const session = readNearAuthSession();
+  clearNearAuthSession();
+  if (!session) return;
+
+  try {
+    await fetch(`${clientNearAuthConfig.loginApiPath}/logout`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.sessionToken}` },
+      credentials: "same-origin",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    // Local sign-out still succeeds if the server is unreachable.
+  }
 }
 
 function readableAuth0Error(error: unknown): string {

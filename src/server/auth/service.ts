@@ -30,6 +30,11 @@ export interface AuthenticateNearLoginDeps {
   jwks?: JWTVerifyGetKey;
   lookupDerivedPublicKey?: DerivedPublicKeyLookup;
   store?: InMemoryAuthStore;
+  /** Per-subject rate/concurrency guard, applied around the MPC lookup. */
+  withSubjectLimit?: <T>(
+    subject: string,
+    task: () => Promise<T>,
+  ) => Promise<T>;
 }
 
 /**
@@ -57,15 +62,19 @@ export async function authenticateNearLogin(
   }
 
   const claims = await verifyAuth0Token(input.accessToken, config, deps.jwks);
-  const identity = await verifyNearIdentityForSubject(
-    {
-      subject: claims.sub,
-      email: claims.email,
-      clientPublicKey: input.nearPublicKey,
-    },
-    config,
-    deps.lookupDerivedPublicKey,
-  );
+  const verifyIdentity = () =>
+    verifyNearIdentityForSubject(
+      {
+        subject: claims.sub,
+        email: claims.email,
+        clientPublicKey: input.nearPublicKey,
+      },
+      config,
+      deps.lookupDerivedPublicKey,
+    );
+  const identity = deps.withSubjectLimit
+    ? await deps.withSubjectLimit(claims.sub, verifyIdentity)
+    : await verifyIdentity();
 
   const player: NearPlayerIdentity = {
     id: identity.playerId,
@@ -93,19 +102,33 @@ export async function authenticateNearLogin(
   };
 }
 
+/**
+ * Verify the signed session and, when this process has session records, ensure
+ * that record still exists. A fresh process (before any login) falls back to the
+ * signed token itself; the token remains the source of truth across restarts.
+ */
+export async function verifyActiveGameSession(
+  token: string,
+  config: ServerAuthConfig,
+  store: InMemoryAuthStore = defaultAuthStore,
+): Promise<GameSessionClaims> {
+  const claims = await verifyGameSessionToken(token, config);
+  if (store.hasRecordedSessions) {
+    const stored = store.getSession(claims.sessionId);
+    if (!stored || stored.playerId !== claims.playerId) {
+      throw new AuthError("SESSION_INVALID", 401, "Game session has been revoked");
+    }
+  }
+  return claims;
+}
+
 /** Validate a game session for the restore-session endpoint. */
 export async function describeGameSession(
   token: string,
   config: ServerAuthConfig,
   store: InMemoryAuthStore = defaultAuthStore,
 ): Promise<NearAuthSessionInfo> {
-  const claims: GameSessionClaims = await verifyGameSessionToken(token, config);
-  // If this process has issued sessions, use its record to reject revoked or
-  // expired ones. A fresh process (before any login) falls back to the signed
-  // token itself; the token remains the source of truth across restarts.
-  if (store.hasRecordedSessions && !store.getSession(claims.sessionId)) {
-    throw new AuthError("SESSION_INVALID", 401, "Game session has been revoked");
-  }
+  const claims = await verifyActiveGameSession(token, config, store);
 
   return {
     expiresAt: new Date(claims.expiresAt * 1000).toISOString(),
@@ -117,4 +140,17 @@ export async function describeGameSession(
       auth0SubjectHash: claims.auth0SubjectHash,
     },
   };
+}
+
+/**
+ * Revoke a signed session. Logout is idempotent for a still-valid signature so
+ * repeated sign-out clicks do not surface a misleading error.
+ */
+export async function revokeGameSession(
+  token: string,
+  config: ServerAuthConfig,
+  store: InMemoryAuthStore = defaultAuthStore,
+): Promise<void> {
+  const claims = await verifyGameSessionToken(token, config);
+  store.revokeSession(claims.sessionId);
 }

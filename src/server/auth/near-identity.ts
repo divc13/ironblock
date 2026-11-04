@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { PublicKey } from "near-api-js/lib/utils";
+import { PublicKey } from "near-api-js/lib/utils/index.js";
 import type { ServerAuthConfig } from "./config";
 import { AuthError } from "./errors";
 

@@ -73,6 +73,10 @@ export class InMemoryAuthStore {
   }
 
   revokeSession(sessionId: string): void {
+    // Mark this process as authoritative even when the token came from an
+    // earlier process and had no local record. A subsequent logout must not
+    // fall back to "the signed token is enough".
+    this.recordedSessions = true;
     this.sessions.delete(sessionId);
   }
 

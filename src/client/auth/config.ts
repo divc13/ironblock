@@ -1,3 +1,6 @@
+import { NEAR_AUTH_TESTNET_DEFAULTS } from "../../shared/auth/defaults";
+import { loginApiPathForBase } from "./api-path";
+
 /**
  * Public NEAR Auth testnet configuration for the browser.
  *
@@ -18,20 +21,35 @@ export interface ClientNearAuthConfig {
 
 const SHARED_TESTNET_CLIENT_ID = "np8paqIpMWmNbzT4xAvOOapZBjsOpptl";
 
+function testnetNetwork(): "testnet" {
+  const configured =
+    import.meta.env.VITE_NEAR_AUTH_NETWORK ??
+    NEAR_AUTH_TESTNET_DEFAULTS.network;
+  if (configured !== "testnet") {
+    throw new Error(
+      "This authentication spike is testnet-only; set VITE_NEAR_AUTH_NETWORK=testnet",
+    );
+  }
+  return configured;
+}
+
 export const clientNearAuthConfig: ClientNearAuthConfig = {
-  network: "testnet",
+  network: testnetNetwork(),
   clientId:
     import.meta.env.VITE_NEAR_AUTH_CLIENT_ID || SHARED_TESTNET_CLIENT_ID,
   domain:
-    import.meta.env.VITE_NEAR_AUTH_DOMAIN || "login.testnet.fast-auth.com",
+    import.meta.env.VITE_NEAR_AUTH_DOMAIN ?? NEAR_AUTH_TESTNET_DEFAULTS.domain,
   audience:
-    import.meta.env.VITE_NEAR_AUTH_AUDIENCE || "auth0.jwt.fast-auth.testnet",
+    import.meta.env.VITE_NEAR_AUTH_AUDIENCE ??
+    NEAR_AUTH_TESTNET_DEFAULTS.audience,
   rpcUrl:
-    import.meta.env.VITE_NEAR_RPC_URL || "https://rpc.testnet.near.org",
+    import.meta.env.VITE_NEAR_RPC_URL ?? NEAR_AUTH_TESTNET_DEFAULTS.rpcUrl,
   fastAuthContractId:
-    import.meta.env.VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID || "fast-auth.testnet",
+    import.meta.env.VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID ??
+    NEAR_AUTH_TESTNET_DEFAULTS.fastAuthContractId,
   mpcContractId:
-    import.meta.env.VITE_NEAR_AUTH_MPC_CONTRACT_ID || "v1.signer-prod.testnet",
-  loginApiPath: "/api/auth",
+    import.meta.env.VITE_NEAR_AUTH_MPC_CONTRACT_ID ??
+    NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
+  loginApiPath: loginApiPathForBase(import.meta.env.BASE_URL),
   sessionStorageKey: "ironblock.near-auth.session.v1",
 };

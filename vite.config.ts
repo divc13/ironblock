@@ -3,6 +3,10 @@ import { rpgjs, tiledMapFolderPlugin } from '@rpgjs/vite';
 import { randomBytes } from 'node:crypto';
 import startServer from './src/server';
 import { nearAuthApiPlugin } from './src/server/auth/vite-plugin';
+import {
+  loadServerAuthConfig,
+  validateClientServerAuthConsistency,
+} from './src/server/auth/config';
 
 // This project uses the authoritative Node server for NEAR Auth. Standalone
 // mode remains available for asset smoke tests with RPG_TYPE=rpg.
@@ -28,11 +32,19 @@ export default defineConfig(({ mode }) => {
     );
   }
 
+  const serverAuthConfig = loadServerAuthConfig(process.env);
+  validateClientServerAuthConsistency(serverAuthConfig, env);
+
   return {
     // The shared NEAR Auth testnet Auth0 application allows
     // http://localhost:3000 as a callback. Keep this port stable so popup login
     // works without changing the shared tenant's allowed callback URLs.
     server: {
+      port: 3000,
+      strictPort: true,
+    },
+    preview: {
+      host: '0.0.0.0',
       port: 3000,
       strictPort: true,
     },
@@ -47,7 +59,14 @@ export default defineConfig(({ mode }) => {
         buildOutputPath: 'map'            // Match the runtime Tiled URL prefix
       }),
       ...rpgjs({
-        server: startServer
+        server: startServer,
+        entryPoints: {
+          mmorpg: {
+            adapters: {
+              production: './src/server/production.ts',
+            },
+          },
+        },
       })
     ],
   };

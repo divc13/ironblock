@@ -9,6 +9,7 @@ export type AuthErrorCode =
   | "NEAR_KEY_MISMATCH"
   | "NEAR_LOOKUP_FAILED"
   | "SESSION_INVALID"
+  | "RATE_LIMITED"
   | "CONFIGURATION";
 
 /**
