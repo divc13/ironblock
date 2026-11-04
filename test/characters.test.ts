@@ -10,7 +10,6 @@ import {
 import { economy } from '../src/config/economy'
 import {
   townsfolkEventName,
-  townsfolkSignEventName,
   world,
 } from '../src/config/world'
 import { worldSpritesheetIds } from '../src/client/world-sprites'
@@ -53,9 +52,10 @@ test('townsfolk roster is complete, unique and aligned with the bot config', () 
   assert.equal(characterForBotIndex(characters.length), characters[0])
 })
 
-test('ambient townsfolk placements are data-driven, distinct and in bounds', () => {
+test('all eight named economy bots are visible, distinct and in bounds', () => {
   const placed = charactersWithMap()
-  assert.ok(placed.length >= 3 && placed.length <= 4)
+  assert.equal(placed.length, characters.length)
+  assert.equal(placed.length, 8)
 
   const coordinates = new Set<string>()
   for (const character of placed) {
@@ -63,9 +63,13 @@ test('ambient townsfolk placements are data-driven, distinct and in bounds', () 
     const { x, y } = character.map!
     assert.ok(x > 0 && y > 0)
     assert.ok(x < world.map.widthPx && y < world.map.heightPx)
+    assert.ok(
+      y >= 700,
+      `${character.displayName} starts below the fixed HUD so the sprite and nameplate are visible`,
+    )
     coordinates.add(`${x},${y}`)
   }
-  assert.equal(coordinates.size, placed.length, 'townsfolk do not share a tile')
+  assert.equal(coordinates.size, placed.length, 'economy bots do not share a tile')
 
   const events = buildWorldEvents()
   for (const character of placed) {
@@ -76,16 +80,26 @@ test('ambient townsfolk placements are data-driven, distinct and in bounds', () 
     assert.equal(person.event.name, townsfolkEventName(character.id))
     assert.equal(typeof person.event.onAction, 'function')
 
-    const sign = events.find(event => event.id === townsfolkSignEventName(character.id))
-    assert.ok(sign, `${character.displayName} has a name sign`)
-    assert.ok(sign.y >= 32 && sign.y < world.map.heightPx)
+    assert.equal(
+      events.some(event => event.id === `sign:townsfolk:${character.id}`),
+      false,
+      `${character.displayName} has no separate name sign`,
+    )
   }
+
+  const townsfolkSigns = events.filter(event => event.id.startsWith('sign:townsfolk:'))
+  assert.equal(townsfolkSigns.length, 0, 'nameplates travel on the bot sprites')
 
   const spriteIds = new Set(worldSpritesheetIds())
   for (const character of placed) {
     assert.ok(spriteIds.has(`ironblock:townsfolk:${character.id}`))
-    assert.ok(spriteIds.has(`ironblock:sign:townsfolk:${character.id}`))
+    assert.equal(
+      spriteIds.has(`ironblock:sign:townsfolk:${character.id}`),
+      false,
+      `${character.displayName} has no name-sign sprite`,
+    )
   }
+  assert.ok(spriteIds.has('ironblock:sign:board:orders'), 'Guild Orders sign has a sprite')
 })
 
 test('economy bots map to roster names by id and index, including restored saves', () => {

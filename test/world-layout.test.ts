@@ -95,9 +95,33 @@ test('server map content is derived from config with unique event ids', () => {
     (sum, resourceId) => sum + economy.resources.nodes[resourceId].nodeCount,
     0,
   )
+  const botCount = charactersWithMap().length
+  assert.equal(botCount, 8, 'all eight economy bots are placed on the map')
   assert.equal(
     events.length,
-    merchantCount * 3 + resourceIds.length + nodeCount + charactersWithMap().length * 2,
+    merchantCount * 3 + resourceIds.length + nodeCount + 1 + botCount,
+    'merchants, resources, one Guild Orders sign and one event per visible bot',
+  )
+
+  const botEvents = events.filter(entry => entry.id.startsWith('townsfolk:'))
+  assert.equal(botEvents.length, botCount, 'one map event per economy bot, no name signs')
+
+  const boardSigns = events.filter(entry => entry.id === 'sign:board:orders')
+  assert.equal(boardSigns.length, 1, 'exactly one Guild Orders sign')
+  const boardSign = boardSigns[0]
+  assert.equal(boardSign.x, world.orderBoard.x)
+  assert.equal(boardSign.y, Math.max(32, world.orderBoard.y - 58))
+  assert.ok(boardSign.y < world.orderBoard.y, 'the sign sits above the board')
+  assert.ok(
+    Math.abs(boardSign.x - world.orderBoard.x) <= 1 &&
+      Math.abs(boardSign.y - world.orderBoard.y) <= 80,
+    'the sign is near the Guild Orders board',
+  )
+
+  assert.equal(
+    events.some(entry => entry.id.startsWith('sign:townsfolk:')),
+    false,
+    'townsfolk use travelling nameplates, not separate sign events',
   )
 
   const ids = new Set(events.map(event => event.id))

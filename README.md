@@ -29,9 +29,13 @@ Implemented:
   **Rook Kestrel**, each with their own cash, stock, pricing personality and
   generated stall.
 - Eight named townsfolk — Marlowe Vane, Calla Morn, Don Ottavio, Rhea Vance,
-  Yuri Blaine, Trinity Vale, Bram Sol and Ines Calder — with four ambient
-  characters standing in the market square and the full roster in the in-game
-  Townsfolk panel and the spectator dashboard.
+  Yuri Blaine, Trinity Vale, Bram Sol and Ines Calder — all visible on the
+  market square as server-authoritative economy-bot actors. They wander the
+  square and walk to the matching resource area, merchant stall or Guild Orders
+  board when the live loop reports a gather, trade or order delivery. Their
+  nameplates travel on the sprites. The economy engine remains the source of
+  truth; the visual director only mirrors its events, and fast-forward playback
+  is never animated.
 - One process-wide **live NPC loop** in production, dev and preview. Bots gather,
   trade and deliver orders; merchants restock and pay rent; caravans arrive on
   their own. The loop advances 1 in-game second per real second, serializes with
@@ -98,7 +102,8 @@ npm run dev
 Open exactly <http://localhost:3000>. The first successful Auth0 login reloads
 the page once by design; wait for the town and the “Live market” chip. The
 market keeps moving while you watch: press **T** for the Townsfolk roster and
-watch the Market Wire for their gather/trade/order events. The full walkthrough
+watch the Market Wire for their gather/trade/order events as the named bots walk
+to the matching resource area, stall or Guild Orders board. The full walkthrough
 is in [`docs/DEMO.md`](docs/DEMO.md).
 
 The port is deliberate: the shared NEAR Auth testnet Auth0 application allows

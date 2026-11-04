@@ -76,17 +76,23 @@ prices or balances as live.
 
 **What to point at first**
 
-- The market square has eight merchant stalls, four resource areas and four
-  ambient townsfolk. The two newest stalls, Sable Voss (fixer) and Rook Kestrel
-  (smuggler), sit on the bottom row. Rhea Vance, Trinity Vale, Bram Sol and Ines
-  Calder stand near the centre; talk to them for a one-line character beat.
+- The market square has eight merchant stalls, four resource areas and all
+  eight named townsfolk. They are the same bots that fill the Market Wire: they
+  wander the square, and when the live loop reports a gather, trade or order
+  delivery they walk to the matching resource area, merchant stall or the Guild
+  Orders board near the south gate. Nameplates travel above them. Movement is
+  server-side, so every client sees the same positions. The authoritative
+  engine still decides the economic outcome; the walk is a visual mirror of its
+  events, not a second simulation. Fast-forward is not animated. The two newest
+  stalls, Sable Voss (fixer) and Rook Kestrel (smuggler), sit on the bottom row.
+  Talk to any townsperson for a one-line character beat.
 - The HUD shows **Cash**, **Carry**, **Stamina**, **Day** and **Town**, plus
   **Bag (I)**, **Orders (O)**, **Townsfolk (T)**, **Week (F)** and **Recap (R)**.
 - The **Market Wire** feed on the right records every trade and price move.
-  The eight named townsfolk keep acting on their own while you explore, so the
-  feed fills without waiting for a player trade. Open **Townsfolk (T)** to meet
-  Marlowe Vane, Calla Morn, Don Ottavio, Rhea Vance, Yuri Blaine, Trinity Vale,
-  Bram Sol and Ines Calder.
+  The eight named townsfolk keep acting and moving on their own while you
+  explore, so the feed fills without waiting for a player trade. Open
+  **Townsfolk (T)** to meet Marlowe Vane, Calla Morn, Don Ottavio, Rhea Vance,
+  Yuri Blaine, Trinity Vale, Bram Sol and Ines Calder.
 
 **Gather 10×**
 

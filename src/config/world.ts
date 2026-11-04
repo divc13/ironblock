@@ -39,6 +39,13 @@ export const world = {
   /** Player spawn near the south gate, facing the square. */
   spawn: { x: 640, y: 1056 },
 
+  /**
+   * Guild Orders board used by visible bot order deliveries. It sits on the
+   * open walkway between the south stalls and the player spawn so its sign is
+   * not hidden by the taller, name-plated bot sprites around the centre.
+   */
+  orderBoard: { x: 640, y: 960 },
+
   /** Interact with merchants/nodes when within this pixel distance. */
   interactionRadius: 72,
 
@@ -159,14 +166,9 @@ export function merchantEventName(merchantId: MerchantId): string {
   return `merchant:${merchantId}`
 }
 
-/** Ambient townsfolk event id, keyed by the stable character id. */
+/** Visible economy-bot event id, keyed by the stable character id. */
 export function townsfolkEventName(characterId: string): string {
   return `townsfolk:${characterId}`
-}
-
-/** Name sign placed above an ambient townsfolk character. */
-export function townsfolkSignEventName(characterId: string): string {
-  return `sign:townsfolk:${characterId}`
 }
 
 export function resourceNodeEventName(resourceId: ResourceId, index: number): string {

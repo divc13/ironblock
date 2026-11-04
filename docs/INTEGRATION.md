@@ -141,7 +141,15 @@ adds:
 | `feat/merchant-characters` | `94a5aa3` | Added Sable Voss (fixer, stall 7) and Rook Kestrel (smuggler, stall 8), with explicit map positions, generated signs and updated seven-day numbers. |
 | `feat/townsfolk-characters` | `1380d80` | Added an eight-person, data-only townsfolk roster; names flow into bot events, the in-game Townsfolk panel and the spectator tape. Four ambient characters and name signs stand in the market square. |
 
-Final integrated checks: `npm test` **261/261**, `npm run config:check`,
+The integrated Phase 2 worktree supersedes the ambient-only presentation: all
+eight roster entries are now server-authoritative
+economy-bot actors. The live visual director mirrors `bot.gather`, `bot.trade`
+and `order.fulfilled` events by walking the matching actor to a resource area,
+merchant stall or the Guild Orders board. Nameplates travel on the sprites, idle
+bots patrol the square, and fast-forward playback is not animated. The economy
+engine remains the source of truth for every balance, trade and order.
+
+Final integrated checks: `npm test` **266/266**, `npm run config:check`,
 seven-day simulation (**2 bankruptcies, 1 investment, 415 order units**),
 production build, a live snapshot probe showing bot trades advancing without
 player input, and a standalone spectator build check. Production probes cover

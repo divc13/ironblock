@@ -68,6 +68,34 @@ const toSheet = (id: string, canvas: HTMLCanvasElement): WorldSheet => ({
   },
 })
 
+const toAnimatedSheet = (
+  id: string,
+  frames: readonly HTMLCanvasElement[],
+): WorldSheet => {
+  const width = frames[0]?.width ?? 1
+  const height = frames[0]?.height ?? 1
+  const canvas = makeCanvas(width * frames.length, height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return toSheet(id, frames[0] ?? makeCanvas(width, height))
+  frames.forEach((frame, index) => ctx.drawImage(frame, index * width, 0))
+
+  return {
+    id,
+    image: canvas.toDataURL('image/png'),
+    framesWidth: frames.length,
+    framesHeight: 1,
+    textures: {
+      stand: { animations: () => [[{ time: 0, frameX: 0, frameY: 0 }]] },
+      walk: {
+        animations: () => [[
+          { time: 0, frameX: 0, frameY: 0 },
+          { time: 180, frameX: 1, frameY: 0 },
+        ]],
+      },
+    },
+  }
+}
+
 const roundedRect = (
   context: CanvasRenderingContext2D,
   x: number,
@@ -441,10 +469,43 @@ const townsfolkPalette = [
   { coat: '#7b6fb0', trim: '#e8d9b6', hair: '#3b2a1f' },
   { coat: '#a2577e', trim: '#f1e2c3', hair: '#241d12' },
   { coat: '#4f8f6a', trim: '#e3cf9b', hair: '#5b3b22' },
+  { coat: '#8a5a34', trim: '#e0c48a', hair: '#2a2118' },
+  { coat: '#3f7f7a', trim: '#d9e2d1', hair: '#1d2a26' },
+  { coat: '#b3653f', trim: '#f0d7b4', hair: '#3d2a1c' },
+  { coat: '#5b6d8c', trim: '#d8d2c2', hair: '#25231e' },
 ] as const
 
-const drawTownsfolk = (character: CharacterConfig): HTMLCanvasElement => {
-  const canvas = makeCanvas(64, 88)
+const drawNameplate = (
+  ctx: CanvasRenderingContext2D,
+  name: string,
+  width: number,
+): void => {
+  const plateWidth = width - 8
+  ctx.fillStyle = 'rgba(20, 14, 8, 0.45)'
+  roundedRect(ctx, 4, 5, plateWidth, 20, 5)
+  ctx.fill()
+  ctx.fillStyle = '#241d12'
+  roundedRect(ctx, 2, 2, plateWidth, 20, 5)
+  ctx.fill()
+  ctx.strokeStyle = '#c9a227'
+  ctx.lineWidth = 1
+  roundedRect(ctx, 2.5, 2.5, plateWidth - 1, 19, 4)
+  ctx.stroke()
+
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#f4e7c8'
+  const size = fitFont(ctx, name, plateWidth - 14, 11)
+  ctx.font = `700 ${size}px Georgia, "Times New Roman", serif`
+  ctx.fillText(name, width / 2, 12.5)
+}
+
+const drawTownsfolk = (
+  character: CharacterConfig,
+  step = 0,
+): HTMLCanvasElement => {
+  const width = 96
+  const canvas = makeCanvas(width, 112)
   const ctx = canvas.getContext('2d')
   if (!ctx) return canvas
 
@@ -452,6 +513,16 @@ const drawTownsfolk = (character: CharacterConfig): HTMLCanvasElement => {
   const palette = townsfolkPalette[index % townsfolkPalette.length]
   const skin = '#d8a77a'
   const dark = '#3b2b1d'
+  const stride = step === 1 ? 2 : 0
+  const bob = step === 1 ? 1 : 0
+
+  drawNameplate(ctx, character.displayName, width)
+
+  // The body is drawn in its original 64x88 space, then centered below the
+  // nameplate. The two walk frames only change the stride, so the feet and
+  // shadow stay anchored to the event tile.
+  ctx.save()
+  ctx.translate(16, 24 + bob)
 
   // Ground shadow.
   ctx.fillStyle = 'rgba(20, 14, 8, 0.28)'
@@ -461,12 +532,25 @@ const drawTownsfolk = (character: CharacterConfig): HTMLCanvasElement => {
 
   // Legs and boots.
   ctx.fillStyle = '#4a3a2b'
-  ctx.fillRect(23, 62, 8, 17)
-  ctx.fillRect(35, 62, 8, 17)
+  ctx.fillRect(23 - stride, 62, 8, 17)
+  ctx.fillRect(35 + stride, 62, 8, 17)
   ctx.fillStyle = dark
-  roundedRect(ctx, 19, 76, 14, 6, 3)
+  roundedRect(ctx, 19 - stride, 76, 14, 6, 3)
   ctx.fill()
-  roundedRect(ctx, 33, 76, 14, 6, 3)
+  roundedRect(ctx, 33 + stride, 76, 14, 6, 3)
+  ctx.fill()
+
+  // Arms sway slightly against the legs.
+  const armSwing = step === 1 ? 2 : 0
+  ctx.fillStyle = palette.coat
+  roundedRect(ctx, 8 + armSwing, 38, 9, 25, 4)
+  ctx.fill()
+  roundedRect(ctx, 47 - armSwing, 38, 9, 25, 4)
+  ctx.fill()
+  ctx.fillStyle = skin
+  ctx.beginPath()
+  ctx.arc(12.5 + armSwing, 65, 4, 0, Math.PI * 2)
+  ctx.arc(51.5 - armSwing, 65, 4, 0, Math.PI * 2)
   ctx.fill()
 
   // Coat and shoulders.
@@ -477,18 +561,6 @@ const drawTownsfolk = (character: CharacterConfig): HTMLCanvasElement => {
   ctx.lineWidth = 2
   roundedRect(ctx, 16, 34, 32, 34, 8)
   ctx.stroke()
-
-  // Arms and hands.
-  ctx.fillStyle = palette.coat
-  roundedRect(ctx, 8, 38, 9, 25, 4)
-  ctx.fill()
-  roundedRect(ctx, 47, 38, 9, 25, 4)
-  ctx.fill()
-  ctx.fillStyle = skin
-  ctx.beginPath()
-  ctx.arc(12.5, 65, 4, 0, Math.PI * 2)
-  ctx.arc(51.5, 65, 4, 0, Math.PI * 2)
-  ctx.fill()
 
   // Coat opening and belt.
   ctx.strokeStyle = palette.trim
@@ -526,6 +598,7 @@ const drawTownsfolk = (character: CharacterConfig): HTMLCanvasElement => {
   ctx.arc(36.5, 25, 1.5, 0, Math.PI * 2)
   ctx.fill()
 
+  ctx.restore()
   return canvas
 }
 
@@ -562,14 +635,16 @@ const build = (id: string): WorldSheet | undefined => {
 
   if (kind === 'townsfolk' && a) {
     const character = characterLookup.get(a)
-    if (character) return toSheet(id, drawTownsfolk(character))
+    if (character) {
+      return toAnimatedSheet(id, [
+        drawTownsfolk(character, 0),
+        drawTownsfolk(character, 1),
+      ])
+    }
   }
 
-  if (kind === 'sign' && a === 'townsfolk' && b) {
-    const character = characterLookup.get(b)
-    if (character) {
-      return toSheet(id, drawSign(character.displayName, character.archetype, 'area'))
-    }
+  if (kind === 'sign' && a === 'board' && b === 'orders') {
+    return toSheet(id, drawSign('Guild Orders', 'Bot deliveries', 'area'))
   }
 
   if (kind === 'node' && a && nodeLookup[a]) {
@@ -607,8 +682,8 @@ export function worldSpritesheetIds(): string[] {
   for (const character of characters) {
     if (!character.map) continue
     ids.push(`${WORLD_SPRITE_PREFIX}townsfolk:${character.id}`)
-    ids.push(`${WORLD_SPRITE_PREFIX}sign:townsfolk:${character.id}`)
   }
+  ids.push(`${WORLD_SPRITE_PREFIX}sign:board:orders`)
   return ids
 }
 

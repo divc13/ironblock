@@ -14,6 +14,7 @@ import { loadServerAuthConfig, type ServerAuthConfig } from "./auth/config";
 import { createNearAuthHttpHandler } from "./auth/http";
 import { defaultAuthStore, verifyActiveGameSession } from "./auth/service";
 import { createEconomyHttpHandler } from "./economy/http";
+import { clearBotActors } from "./economy/bot-actors";
 import { startLiveEconomy, stopLiveEconomy } from "./economy/live";
 import { startEconomyService } from "./economy/runtime";
 import { createObservabilityNodeHandler } from "./observability/node-mount";
@@ -203,6 +204,7 @@ export async function startProductionServer(
     async close() {
       // Stop scheduling before sockets close, then persist the final world once.
       await stopLiveEconomy();
+      clearBotActors();
       for (const client of wsServer.clients) client.terminate();
       await new Promise<void>((resolveClose) => wsServer.close(() => resolveClose()));
       await new Promise<void>((resolveClose, rejectClose) => {

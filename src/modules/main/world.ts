@@ -14,9 +14,9 @@ import {
   resourceNodeEventName,
   resourceNodePositions,
   townsfolkEventName,
-  townsfolkSignEventName,
   world,
 } from '../../config/world'
+import { registerBotActor } from '../../server/economy/bot-actors'
 import type { MerchantId, ResourceId } from '../../shared/types'
 
 /**
@@ -103,11 +103,15 @@ function signEvent(graphic: string): EventDefinition {
   }
 }
 
-function townsfolkEvent(character: CharacterConfig): EventDefinition {
+function botActorEvent(character: CharacterConfig): EventDefinition {
   return {
     name: townsfolkEventName(character.id),
     onInit() {
       this.setGraphic(`ironblock:townsfolk:${character.id}`)
+      // Movement is server-authoritative so every connected player sees the
+      // same bot position. The activity director only moves this actor; the
+      // economy service remains the source of truth for balances and trades.
+      registerBotActor(character, this)
     },
     onAction(player: RpgPlayer) {
       player.showText(`${character.displayName} — ${character.archetype}\n${character.line}`)
@@ -167,19 +171,20 @@ export function buildWorldEvents(): ServerEventPlacement[] {
     })
   }
 
+  events.push({
+    id: 'sign:board:orders',
+    x: world.orderBoard.x,
+    y: Math.max(32, world.orderBoard.y - 58),
+    event: signEvent('ironblock:sign:board:orders'),
+  })
+
   for (const character of charactersWithMap()) {
     if (!character.map) continue
-    events.push({
-      id: townsfolkSignEventName(character.id),
-      x: character.map.x,
-      y: Math.max(32, character.map.y - 58),
-      event: signEvent(`ironblock:sign:townsfolk:${character.id}`),
-    })
     events.push({
       id: townsfolkEventName(character.id),
       x: character.map.x,
       y: character.map.y,
-      event: townsfolkEvent(character),
+      event: botActorEvent(character),
     })
   }
 
