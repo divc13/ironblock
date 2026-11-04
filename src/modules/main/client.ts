@@ -1,5 +1,7 @@
 import { defineModule, type RpgClient } from '@rpgjs/client'
 import { createEconomyRuntime } from '../../client/economy'
+import { HttpEconomyClient } from '../../client/economy/http'
+import { readNearAuthSession } from '../../client/auth/near-auth'
 import { resolveWorldSpritesheet } from '../../client/world-sprites'
 import { economy } from '../../config/economy'
 import {
@@ -157,7 +159,17 @@ export default defineModule<RpgClient>({
         return true
       }
 
-      const runtime = createEconomyRuntime()
+      const session = readNearAuthSession()
+      const serverClient = session
+        ? new HttpEconomyClient({ sessionToken: session.sessionToken })
+        : undefined
+      const runtime = createEconomyRuntime({ serverClient })
+      if (!serverClient) {
+        runtime.note =
+          'No NEAR Auth session — running the local demo economy. Sign in to trade on the authoritative market.'
+        runtime.fellBackToMock = true
+        console.warn(`[Ironblock] ${runtime.note}`)
+      }
       mountedClient = runtime.client
       ui = mountIronblockUI({
         client: runtime.client,

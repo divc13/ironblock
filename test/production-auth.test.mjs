@@ -40,6 +40,20 @@ async function assertAuthRoutes(origin, prefix) {
     service: "near-auth",
     network: "testnet",
   });
+
+  const economy = await fetch(`${origin}${prefix}/api/economy/snapshot`);
+  assert.equal(economy.status, 401);
+  assert.notEqual(economy.status, 404);
+  assert.match(
+    economy.headers.get("content-type") ?? "",
+    /application\/json/,
+  );
+  assert.deepEqual(await economy.json(), {
+    error: {
+      code: "UNAUTHORIZED",
+      message: "Sign in with NEAR Auth to use the market economy",
+    },
+  });
 }
 
 test("built app exposes auth routes in preview and the production host", async () => {

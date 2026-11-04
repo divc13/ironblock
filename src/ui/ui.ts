@@ -862,7 +862,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     craftHeading.style.padding = '18px 0 6px'
     craftHeading.style.fontSize = '1rem'
     craftHeading.style.fontFamily = 'var(--ib-serif)'
-    body.append(craftHeading, $('p', 'ib-muted', 'Recipes run instantly in the mock. Inputs are consumed and stamina is spent.'))
+    body.append(craftHeading, $('p', 'ib-muted', 'Recipes run instantly. Inputs are consumed and stamina is spent.'))
 
     const recipeGrid = $('div', 'ib-grid cols-2')
     for (const recipe of Object.values(economy.recipes)) {
@@ -931,7 +931,9 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
     const intro = $('p', 'ib-muted')
     intro.textContent =
-      'Simulate seven days of town trade. The mock timeline is deterministic: bots trade, caravans restock, rent is paid, and stalls can close.'
+      client.mode === 'server'
+        ? 'Simulate seven days of town trade on the authoritative server. Bots trade, caravans restock, rent is paid, and stalls can close.'
+        : 'Simulate seven days of town trade. The mock timeline is deterministic: bots trade, caravans restock, rent is paid, and stalls can close.'
     body.append(intro)
 
     const progress = $('div', 'ib-progress')
@@ -1207,17 +1209,28 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     const body = $('div', 'ib-panel-body')
     if (entries.length === 0) {
       const placeholder = $('div', 'ib-placeholder')
-      placeholder.append($('h3', undefined, 'Order board not connected'))
-      placeholder.append(
-        $(
-          'p',
-          undefined,
-          'The mock economy has no live order book. This panel is intentionally a placeholder: the integration agent can wire the exchange service and return OrderBoardEntry rows.',
-        ),
-      )
-      placeholder.append(
-        $('p', 'ib-muted', 'Contract: getOrderBoard(): Promise<OrderBoardEntry[]> — see src/client/economy/types.ts.'),
-      )
+      if (client.mode === 'server') {
+        placeholder.append($('h3', undefined, 'No open guild orders'))
+        placeholder.append(
+          $(
+            'p',
+            undefined,
+            'The guild posts new work as the town trades. Check back after a few days of trade or a fast-forward.',
+          ),
+        )
+      } else {
+        placeholder.append($('h3', undefined, 'Order board not connected'))
+        placeholder.append(
+          $(
+            'p',
+            undefined,
+            'The mock economy has no live order book. This panel is intentionally a placeholder: the integration agent can wire the exchange service and return OrderBoardEntry rows.',
+          ),
+        )
+        placeholder.append(
+          $('p', 'ib-muted', 'Contract: getOrderBoard(): Promise<OrderBoardEntry[]> — see src/client/economy/types.ts.'),
+        )
+      }
       body.append(placeholder)
     } else {
       const table = $('table', 'ib-table')
@@ -1418,8 +1431,25 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
   const refresh = async (): Promise<void> => {
     if (destroyed) return
-    const next = await client.getSnapshot()
-    renderHud(next)
+    try {
+      const next = await client.getSnapshot()
+      renderHud(next)
+      modeChip.textContent = client.mode === 'server' ? 'Live market' : 'Mock market'
+      if (options.fellBackToMock && options.note) {
+        banner.textContent = options.note
+        banner.hidden = false
+      } else {
+        banner.hidden = true
+      }
+    } catch (error) {
+      modeChip.textContent = client.mode === 'server' ? 'Market offline' : 'Mock market'
+      if (client.mode === 'server') {
+        banner.textContent = `The live market server is unavailable — ${
+          error instanceof Error ? error.message : 'check the connection and try again.'
+        }`
+        banner.hidden = false
+      }
+    }
   }
 
   const unsubscribe = client.subscribe(() => {

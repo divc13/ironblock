@@ -39,12 +39,10 @@ export const economyServerModule = defineModule<RpgServer>({
       const service = getEconomyServiceOrNull()
       if (!service) return
 
-      // AUTH INTEGRATION POINT (one line):
-      // Replace `player.id` below with the verified auth/account id once the
-      // NEAR Auth branch supplies it, e.g.
-      //   await service.ensurePlayer(verifiedAuthId, player.name)
-      // This worktree has no auth branch, so no player is auto-created here.
-      void player
+      // `player.id` is the stable id returned by the verified NEAR Auth game
+      // session (Phase 1), never a client-supplied id. Ensuring here links the
+      // authoritative economy player to the authenticated socket identity.
+      await service.ensurePlayer(player.id, player.name)
     },
   },
 })

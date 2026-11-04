@@ -12,6 +12,7 @@ import { createRpgServerTransport } from "@rpgjs/server/node";
 import gameServer from "../server";
 import { loadServerAuthConfig, type ServerAuthConfig } from "./auth/config";
 import { createNearAuthHttpHandler } from "./auth/http";
+import { createEconomyHttpHandler } from "./economy/http";
 import {
   InMemoryNearAuthRateLimiter,
   loadNearAuthRateLimitOptions,
@@ -58,6 +59,9 @@ export async function startProductionServer(
       loadNearAuthRateLimitOptions(),
     ),
   });
+  // Same auth config/store as `/api/auth/*`; the handler lazily shares the
+  // economy service singleton with the game server.
+  const economyHandler = createEconomyHttpHandler({ config });
   const transport = createRpgServerTransport(gameServer as never, {});
   const wsServer = new WebSocketServer({ noServer: true });
 
@@ -91,14 +95,16 @@ export async function startProductionServer(
     }
 
     authHandler(req, res, () => {
-      void serveStatic(req, res, clientDir, basePath).catch((error) => {
-        console.warn("[ironblock] static file failure:", errorMessage(error));
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.end("Internal server error");
-        } else if (!res.writableEnded) {
-          res.end();
-        }
+      economyHandler(req, res, () => {
+        void serveStatic(req, res, clientDir, basePath).catch((error) => {
+          console.warn("[ironblock] static file failure:", errorMessage(error));
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.end("Internal server error");
+          } else if (!res.writableEnded) {
+            res.end();
+          }
+        });
       });
     });
   });

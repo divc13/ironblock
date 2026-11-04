@@ -3,6 +3,7 @@ import { rpgjs, tiledMapFolderPlugin } from '@rpgjs/vite';
 import { randomBytes } from 'node:crypto';
 import startServer from './src/server';
 import { nearAuthApiPlugin } from './src/server/auth/vite-plugin';
+import { economyApiPlugin } from './src/server/economy/vite-plugin';
 import {
   loadServerAuthConfig,
   validateClientServerAuthConsistency,
@@ -53,6 +54,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       nearAuthApiPlugin(),
+      economyApiPlugin(),
       tiledMapFolderPlugin({
         sourceFolder: './src/tiled',      // Folder containing your TMX files
         publicPath: '/map',               // Public URL path for maps

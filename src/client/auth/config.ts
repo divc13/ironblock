@@ -1,4 +1,4 @@
-import { NEAR_AUTH_TESTNET_DEFAULTS } from "../../shared/auth/defaults";
+import { NEAR_AUTH_TESTNET_DEFAULTS, NEAR_AUTH_SESSION_STORAGE_KEY } from "../../shared/auth/defaults";
 import { loginApiPathForBase } from "./api-path";
 
 /**
@@ -51,5 +51,5 @@ export const clientNearAuthConfig: ClientNearAuthConfig = {
     import.meta.env.VITE_NEAR_AUTH_MPC_CONTRACT_ID ??
     NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
   loginApiPath: loginApiPathForBase(import.meta.env.BASE_URL),
-  sessionStorageKey: "ironblock.near-auth.session.v1",
+  sessionStorageKey: NEAR_AUTH_SESSION_STORAGE_KEY,
 };

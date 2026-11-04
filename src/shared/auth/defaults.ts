@@ -14,3 +14,6 @@ export const NEAR_AUTH_TESTNET_DEFAULTS = {
   fastAuthContractId: "fast-auth.testnet",
   mpcContractId: "v1.signer-prod.testnet",
 } as const;
+
+/** Per-tab `sessionStorage` key for the server-issued game session only. */
+export const NEAR_AUTH_SESSION_STORAGE_KEY = "ironblock.near-auth.session.v1";
