@@ -1,12 +1,13 @@
-import { RpgPlayer, type RpgPlayerHooks, Components } from '@rpgjs/server'
+import { RpgPlayer, type RpgPlayerHooks } from '@rpgjs/server'
+import { world } from '../../config/world'
 
 export const player: RpgPlayerHooks = {
     onConnected(player: RpgPlayer) {
-        player.changeMap('simplemap', {
-            x: 300,
-            y: 300
+        player.changeMap(world.mapId, {
+            x: world.spawn.x,
+            y: world.spawn.y
         })
-        player.name = 'YourName'
+        player.name = 'Wanderer'
         player.setGraphic('hero')
     },
     onInput(player: RpgPlayer, { action }) {

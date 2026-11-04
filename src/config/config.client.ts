@@ -1,5 +1,5 @@
 import { provideClientGlobalConfig, provideClientModules, Presets } from "@rpgjs/client";
-import { provideMain } from "../modules/main";
+import mainClient from "../modules/main/client";
 import { provideTiledMap } from "@rpgjs/tiledmap/client";
 
 export default {
@@ -8,8 +8,8 @@ export default {
       basePath: "map",
     }),
     provideClientGlobalConfig(),
-    provideMain(),
     provideClientModules([
+      mainClient,
       {
         spritesheets: [
           {
