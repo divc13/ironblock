@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { rpgjs, tiledMapFolderPlugin } from '@rpgjs/vite';
 import startServer from './src/server';
+import { observabilityApiPlugin } from './src/server/observability';
 
 export default defineConfig({
   optimizeDeps: {
@@ -14,6 +15,9 @@ export default defineConfig({
     }),
     ...rpgjs({
       server: startServer
-    })
-  ], 
+    }),
+    // Read-only spectator API (`/api/market/*`) + `/spectator` dashboard.
+    // Mount point is switchable via IRONBLOCK_OBSERVABILITY_API_PATH.
+    observabilityApiPlugin(),
+  ],
 });
