@@ -250,6 +250,8 @@ export interface BotBehaviorConfig {
   cadenceSeconds: number
   jitterSeconds: number
   maxTradeQuantity: number
+  /** Merchant offers a bot tests before giving up on a trade. */
+  maxTradeAttempts: number
   buyProbability: number
   sellProbability: number
 }
@@ -259,10 +261,18 @@ export interface BotStartingCashConfig {
   max: number
 }
 
+/** Deterministic bot seed inventory; no item IDs are hardcoded in the engine. */
+export interface BotStartingInventoryConfig {
+  chance: number
+  quantityRange: YieldRange
+  fallbackQuantityRange: YieldRange
+}
+
 export interface BotsConfig {
   count: number
   behavior: BotBehaviorConfig
   startingCash: BotStartingCashConfig
+  startingInventory: BotStartingInventoryConfig
 }
 
 export interface CaravanGoodConfig {
@@ -303,6 +313,46 @@ export interface SinksConfig {
   toolDurability: ToolDurabilitySinkConfig
 }
 
+/** Passive cash recovery for open merchants that are under their comfort target. */
+export interface CashRecoveryConfig {
+  /** Fraction of the merchant reserve credited per closed day at most. */
+  dailyRate: number
+  /** Recovery stops once cash reaches reserve * targetReserveMultiple. */
+  targetReserveMultiple: number
+}
+
+/** How investments are repaid from future merchant profit. */
+export interface InvestmentConfig {
+  /** Fraction of positive daily merchant profit shared with investors. */
+  profitShareRate: number
+  /** Skip distributions below this amount. */
+  minDistribution: number
+}
+
+export interface OrderTemplateConfig {
+  id: string
+  issuer: string
+  itemId: ItemId
+  quantityRange: YieldRange
+}
+
+/** Daily bulk-order board. All quantities and rewards stay data-driven. */
+export interface OrdersConfig {
+  maxActive: number
+  /** A new batch of orders is considered every N days. */
+  cadenceDays: number
+  expiryDays: number
+  rewardMultiplier: YieldRange
+  templates: OrderTemplateConfig[]
+}
+
+export interface ReportingConfig {
+  eventRetention: number
+  summaryRetentionDays: number
+  topMovers: number
+  eventSampleSize: number
+}
+
 export type FastForwardSeedBehavior = 'reuse-config-seed' | 'derive-per-run'
 
 export interface FastForwardConfig {
@@ -327,6 +377,10 @@ export interface EconomyConfig {
   bots: BotsConfig
   caravan: CaravanConfig
   sinks: SinksConfig
+  cashRecovery: CashRecoveryConfig
+  investments: InvestmentConfig
+  orders: OrdersConfig
+  reporting: ReportingConfig
   fastForward: FastForwardConfig
 }
 
@@ -439,6 +493,8 @@ export type EventCauseType =
   | 'caravan'
   | 'fast-forward'
   | 'configuration'
+  | 'order'
+  | 'use'
 
 export type MarketEventType =
   | 'trade.buy'
@@ -454,8 +510,18 @@ export type MarketEventType =
   | 'sink.tax'
   | 'caravan.arrival'
   | 'bot.trade'
+  | 'bot.gather'
   | 'system.fast-forward'
   | 'system.configuration'
+  | 'player.join'
+  | 'player.use'
+  | 'merchant.reopen'
+  | 'merchant.distribution'
+  | 'merchant.recovery'
+  | 'order.created'
+  | 'order.accepted'
+  | 'order.fulfilled'
+  | 'order.expired'
 
 export interface EventActor {
   type: EventActorType

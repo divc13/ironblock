@@ -261,6 +261,7 @@ const botsSchema = z
         cadenceSeconds: positive,
         jitterSeconds: nonNegative,
         maxTradeQuantity: z.number().int().positive(),
+        maxTradeAttempts: z.number().int().positive(),
         buyProbability: ratio,
         sellProbability: ratio,
       })
@@ -269,6 +270,13 @@ const botsSchema = z
       .object({
         min: positive,
         max: positive,
+      })
+      .strict(),
+    startingInventory: z
+      .object({
+        chance: ratio,
+        quantityRange: yieldRangeSchema,
+        fallbackQuantityRange: yieldRangeSchema,
       })
       .strict(),
   })
@@ -320,6 +328,48 @@ const sinksSchema = z
   })
   .strict()
 
+const cashRecoverySchema = z
+  .object({
+    dailyRate: ratio,
+    targetReserveMultiple: positive,
+  })
+  .strict()
+
+const investmentsSchema = z
+  .object({
+    profitShareRate: ratio,
+    minDistribution: nonNegative,
+  })
+  .strict()
+
+const orderTemplateSchema = z
+  .object({
+    id,
+    issuer: id,
+    itemId: id,
+    quantityRange: yieldRangeSchema,
+  })
+  .strict()
+
+const ordersSchema = z
+  .object({
+    maxActive: z.number().int().positive(),
+    cadenceDays: z.number().int().positive(),
+    expiryDays: z.number().int().positive(),
+    rewardMultiplier: yieldRangeSchema,
+    templates: z.array(orderTemplateSchema).min(1),
+  })
+  .strict()
+
+const reportingSchema = z
+  .object({
+    eventRetention: z.number().int().positive(),
+    summaryRetentionDays: z.number().int().positive(),
+    topMovers: z.number().int().positive(),
+    eventSampleSize: z.number().int().positive(),
+  })
+  .strict()
+
 const fastForwardSchema = z
   .object({
     days: z.number().int().positive(),
@@ -360,6 +410,10 @@ export const economyConfigSchema = z
     bots: botsSchema,
     caravan: caravanSchema,
     sinks: sinksSchema,
+    cashRecovery: cashRecoverySchema,
+    investments: investmentsSchema,
+    orders: ordersSchema,
+    reporting: reportingSchema,
     fastForward: fastForwardSchema,
   })
   .strict()
@@ -539,6 +593,35 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
     }
   })
 
+  const orderTemplateIds = new Set<string>()
+  config.orders.templates.forEach((template, index) => {
+    const path = `orders.templates[${index}]`
+    itemRef(`${path}.itemId`, template.itemId)
+    if (orderTemplateIds.has(template.id)) {
+      add(`${path}.id`, `duplicate order template id "${template.id}"`)
+    }
+    orderTemplateIds.add(template.id)
+    if (template.quantityRange.min > template.quantityRange.max) {
+      add(`${path}.quantityRange`, 'quantity minimum must not exceed maximum')
+    }
+  })
+  if (config.orders.rewardMultiplier.min > config.orders.rewardMultiplier.max) {
+    add('orders.rewardMultiplier', 'reward multiplier minimum must not exceed maximum')
+  }
+  if (config.orders.maxActive > config.orders.templates.length) {
+    add(
+      'orders.maxActive',
+      'maxActive cannot exceed the number of order templates',
+    )
+  }
+
+  if (config.cashRecovery.targetReserveMultiple <= 1) {
+    add(
+      'cashRecovery.targetReserveMultiple',
+      'recovery target must be above the reserve',
+    )
+  }
+
   for (const [itemId, item] of Object.entries(config.items)) {
     const path = `items.${itemId}`
     const hasSource =
@@ -595,6 +678,21 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
 
   if (config.bots.startingCash.min > config.bots.startingCash.max) {
     add('bots.startingCash', 'bot starting cash minimum must not exceed maximum')
+  }
+  if (
+    config.bots.behavior.buyProbability + config.bots.behavior.sellProbability >
+    1
+  ) {
+    add(
+      'bots.behavior',
+      'buy and sell probabilities must not add up to more than 1',
+    )
+  }
+  for (const key of ['quantityRange', 'fallbackQuantityRange'] as const) {
+    const range = config.bots.startingInventory[key]
+    if (range.min > range.max) {
+      add(`bots.startingInventory.${key}`, 'minimum must not exceed maximum')
+    }
   }
 
   const pricing = config.pricing

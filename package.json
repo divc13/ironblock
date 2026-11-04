@@ -7,7 +7,9 @@
     "build": "vite build",
     "config:check": "tsx scripts/check-config.ts",
     "test": "tsx --test test/*.test.ts",
-    "test:production": "node --test test/production-preview.test.mjs"
+    "test:production": "node --test test/production-preview.test.mjs",
+    "sim": "tsx scripts/sim.ts",
+    "economy:reset": "tsx scripts/economy-reset.ts"
   },
   "keywords": [
     "near",
