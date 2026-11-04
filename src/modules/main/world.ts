@@ -1,4 +1,8 @@
 import type { EventDefinition, RpgPlayer } from '@rpgjs/server'
+import {
+  charactersWithMap,
+  type CharacterConfig,
+} from '../../config/characters'
 import { economy } from '../../config/economy'
 import { defineModule } from '@rpgjs/common'
 import type { RpgServer } from '@rpgjs/server'
@@ -9,6 +13,8 @@ import {
   resourceArea,
   resourceNodeEventName,
   resourceNodePositions,
+  townsfolkEventName,
+  townsfolkSignEventName,
   world,
 } from '../../config/world'
 import type { MerchantId, ResourceId } from '../../shared/types'
@@ -97,6 +103,18 @@ function signEvent(graphic: string): EventDefinition {
   }
 }
 
+function townsfolkEvent(character: CharacterConfig): EventDefinition {
+  return {
+    name: townsfolkEventName(character.id),
+    onInit() {
+      this.setGraphic(`ironblock:townsfolk:${character.id}`)
+    },
+    onAction(player: RpgPlayer) {
+      player.showText(`${character.displayName} — ${character.archetype}\n${character.line}`)
+    },
+  }
+}
+
 /**
  * Builds the market-square map contents from config. Merchant count, stall
  * slots and node counts are all derived; adding a merchant or node to the
@@ -146,6 +164,22 @@ export function buildWorldEvents(): ServerEventPlacement[] {
         y: point.y,
         event: resourceEvent(resourceId, index),
       })
+    })
+  }
+
+  for (const character of charactersWithMap()) {
+    if (!character.map) continue
+    events.push({
+      id: townsfolkSignEventName(character.id),
+      x: character.map.x,
+      y: Math.max(32, character.map.y - 58),
+      event: signEvent(`ironblock:sign:townsfolk:${character.id}`),
+    })
+    events.push({
+      id: townsfolkEventName(character.id),
+      x: character.map.x,
+      y: character.map.y,
+      event: townsfolkEvent(character),
     })
   }
 

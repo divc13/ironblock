@@ -190,7 +190,7 @@ export function explainQuote(quote: Quote, itemName: string): string {
 const EVENT_TYPE_LABELS: Record<string, string> = {
   'trade.buy': 'Purchase',
   'trade.sell': 'Sale',
-  'bot.trade': 'Bot trade',
+  'bot.trade': 'Townsfolk trade',
   'merchant.restock': 'Restock',
   'merchant.bankrupt': 'Bankruptcy',
   'merchant.investment': 'Investment',

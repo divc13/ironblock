@@ -785,6 +785,20 @@
   font-size: 1.2rem;
 }
 
+.ib-townsfolk-card h3 {
+  margin-bottom: 4px;
+  font-family: var(--ib-serif);
+  font-size: 1.05rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ib-ink);
+}
+
+.ib-townsfolk-card .ib-chip {
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
 .ib-stat-row {
   display: flex;
   justify-content: space-between;

@@ -1,3 +1,7 @@
+import {
+  botIdForIndex,
+  characterForBotIndex,
+} from '../../config/characters'
 import { economy } from '../../config/economy'
 import { createMarketEvent } from '../../shared/market-events'
 import { isMerchantBankrupt, quote } from '../../shared/pricing'
@@ -980,6 +984,7 @@ export class MockEconomyClient implements EconomyClient {
     const botCount = this.config.bots.count
     const behavior = this.config.bots.behavior
     for (let bot = 0; bot < botCount; bot += 1) {
+      const identity = characterForBotIndex(bot)
       for (let trip = 0; trip < 2; trip += 1) {
         const merchants = Object.values(this.merchants).filter(
           merchant => merchant.open && !isMerchantBankrupt(merchant, this.config),
@@ -1014,7 +1019,7 @@ export class MockEconomyClient implements EconomyClient {
 
         this.recordEvent({
           type: 'bot.trade',
-          actor: { type: 'bot', id: `bot-${bot}`, displayName: `Bot ${bot + 1}` },
+          actor: { type: 'bot', id: botIdForIndex(bot), displayName: identity.displayName },
           item: itemId,
           quantity: fill,
           price: result.unitPrice,
@@ -1022,7 +1027,7 @@ export class MockEconomyClient implements EconomyClient {
           after: this.snapshotFor(merchant, itemId, side),
           reasons: result.reasons,
           cause: 'trade',
-          message: `Bot ${bot + 1} ${side === 'buy' ? 'bought' : 'sold'} ${fill} ${this.config.items[itemId]?.displayName} at ${merchant.displayName}.`,
+          message: `${identity.displayName} ${side === 'buy' ? 'bought' : 'sold'} ${fill} ${this.config.items[itemId]?.displayName} at ${merchant.displayName}.`,
         })
         this.applyBankruptcy(merchant)
       }
