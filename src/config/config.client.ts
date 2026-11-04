@@ -1,5 +1,4 @@
 import { provideClientGlobalConfig, provideClientModules, Presets } from "@rpgjs/client";
-import { provideMain } from "../modules/main";
 import { provideTiledMap } from "@rpgjs/tiledmap/client";
 
 export default {
@@ -8,7 +7,8 @@ export default {
       basePath: "map",
     }),
     provideClientGlobalConfig(),
-    provideMain(),
+    // The main module is server-only (maps and auth hooks). The client still
+    // receives map data from the authoritative server after login.
     provideClientModules([
       {
         spritesheets: [
