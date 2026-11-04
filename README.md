@@ -345,6 +345,19 @@ Production host values:
 | `PORT` | `3000` |
 | `HOST` | `0.0.0.0` |
 | `IRONBLOCK_CLIENT_DIR` | `dist/client`; optional built-client override |
+| `IRONBLOCK_LIVE_TICK_MS` | `1000`; real-time delay between live NPC ticks |
+| `IRONBLOCK_LIVE_TICK_SECONDS` | `1`; in-game seconds advanced per tick (raise to accelerate) |
+| `IRONBLOCK_LIVE_SAVE_MS` | `15000`; max delay between batched world saves |
+
+The authoritative economy runs one live NPC loop in the process that owns the
+world (production host, Vite dev or preview). It uses a recursive `setTimeout`
+(never overlapping ticks), shares the service action queue with player actions
+and fast-forward, and unrefs its timer. The default advances one in-game second
+per real second; raise `IRONBLOCK_LIVE_TICK_SECONDS` only when you want a faster
+demo, because high ratios can flood the retained event feed. Live ticks are held
+in memory and flushed to disk on the `IRONBLOCK_LIVE_SAVE_MS` cadence and on
+shutdown, so the full world is not rewritten every second. The loop never starts
+inside `node --test` or Vitest unless a test explicitly opts in.
 
 In development, Vite creates an ephemeral in-memory session secret if
 `NEAR_AUTH_SESSION_SECRET` is unset. Set a real secret for any deployed server.

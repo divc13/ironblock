@@ -69,6 +69,13 @@ The production host binds `0.0.0.0:3000` by default. Override with `HOST`,
 `PORT`, and `IRONBLOCK_BASE_PATH`; override the built client directory with
 `IRONBLOCK_CLIENT_DIR` (default `dist/client`).
 
+The economy owns one live NPC loop per process. `IRONBLOCK_LIVE_TICK_MS`
+(default `1000`) controls the real-time cadence and
+`IRONBLOCK_LIVE_TICK_SECONDS` controls how much simulation time each tick
+advances (default `1`; raise it to accelerate the town). High ratios can flood
+the retained event feed. `IRONBLOCK_LIVE_SAVE_MS` (default `15000`) delays
+full-world saves; shutdown flushes once.
+
 Health checks:
 
 ```bash

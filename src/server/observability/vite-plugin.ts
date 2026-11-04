@@ -8,7 +8,8 @@ import {
   normalizeApiPath,
   type ObservabilityContextOptions,
 } from './context'
-import { startEconomyService, type StartEconomyOptions } from '../economy/runtime'
+import { startEconomyService, ensureLiveEconomy, type StartEconomyOptions } from '../economy/runtime'
+import { stopLiveEconomy } from '../economy/live'
 import type { EconomyService } from '../economy/service'
 import { asObservabilitySource } from './source'
 
@@ -70,8 +71,9 @@ function spectatorRewriteMiddleware(spectatorPath: string, base: string) {
  * - build: adds `spectator.html` as a second HTML entry so the dashboard is
  *   emitted to `dist/spectator.html` next to the game entry.
  *
- * The economy service starts lazily on the first API request; booting the game
- * never waits on it.
+ * The economy service starts lazily on the first API request; the live NPC
+ * loop starts with the Vite host (unless this is a test runner), sharing the
+ * process-wide singleton with the economy plugin and the game server.
  */
 export function observabilityApiPlugin(options: ObservabilityPluginOptions = {}): Plugin {
   const spectatorPath = options.spectatorPath ?? DEFAULT_SPECTATOR_PATH
@@ -96,6 +98,30 @@ export function observabilityApiPlugin(options: ObservabilityPluginOptions = {})
     return `${baseSegment}${DEFAULT_API_PATH}` || DEFAULT_API_PATH
   }
 
+  const mount = (server: ViteDevServer | PreviewServer): void => {
+    server.middlewares.use(spectatorRewriteMiddleware(spectatorPath, resolvedBase))
+    server.middlewares.use(
+      createObservabilityMiddleware({
+        ...options,
+        apiPath: apiPathFor(resolvedBase),
+        getService: () => ensureService().then(asObservabilitySource),
+      }),
+    )
+
+    // The economy plugin calls the same idempotent starter. Whichever plugin
+    // boots first creates the loop; the other shares it.
+    void ensureLiveEconomy(options.economy ?? {}).catch(error => {
+      console.warn(
+        '[ironblock] live economy failed to start:',
+        error instanceof Error ? error.message : String(error),
+      )
+    })
+
+    server.httpServer?.once('close', () => {
+      void stopLiveEconomy()
+    })
+  }
+
   return {
     name: 'ironblock:observability-api',
     config(_userConfig, env) {
@@ -117,24 +143,10 @@ export function observabilityApiPlugin(options: ObservabilityPluginOptions = {})
       resolvedBase = resolved.base
     },
     configureServer(server: ViteDevServer) {
-      server.middlewares.use(spectatorRewriteMiddleware(spectatorPath, resolvedBase))
-      server.middlewares.use(
-        createObservabilityMiddleware({
-          ...options,
-          apiPath: apiPathFor(resolvedBase),
-          getService: () => ensureService().then(asObservabilitySource),
-        }),
-      )
+      mount(server)
     },
     configurePreviewServer(server: PreviewServer) {
-      server.middlewares.use(spectatorRewriteMiddleware(spectatorPath, resolvedBase))
-      server.middlewares.use(
-        createObservabilityMiddleware({
-          ...options,
-          apiPath: apiPathFor(resolvedBase),
-          getService: () => ensureService().then(asObservabilitySource),
-        }),
-      )
+      mount(server)
     },
   }
 }

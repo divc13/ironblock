@@ -61,6 +61,20 @@ export default defineConfig(({ mode }) => {
     }
   }
 
+  // The live economy loop reads process.env directly, so mirror its `.env`
+  // overrides for dev and preview the same way as the auth settings.
+  for (const key of [
+    'IRONBLOCK_LIVE_TICK_MS',
+    'IRONBLOCK_LIVE_TICK_SECONDS',
+    'IRONBLOCK_LIVE_SAVE_MS',
+    'IRONBLOCK_ECONOMY_SAVE',
+  ]) {
+    const value = env[key];
+    if (value !== undefined && value !== '' && !process.env[key]) {
+      process.env[key] = value;
+    }
+  }
+
   if (!process.env.NEAR_AUTH_SESSION_SECRET) {
     process.env.NEAR_AUTH_SESSION_SECRET = randomBytes(48).toString('base64url');
     console.warn(
