@@ -11,7 +11,7 @@ export interface ServerAuthConfig {
   domain: string;
   /** Auth0 issuer, with the trailing slash Auth0 uses. */
   issuer: string;
-  /** Audience of the JWT the NEAR Auth guard verifies. */
+  /** Audience of the Auth0 API access token accepted for login. */
   audience: string;
   /** Auth0 JWKS endpoint. */
   jwksUri: string;
@@ -103,7 +103,9 @@ export function loadServerAuthConfig(
 /**
  * Fail the build when the browser and server would use different Auth0/MPC
  * identities. A mismatch produces confusing "invalid audience" or key-mismatch
- * failures at login time, so catch it before bundling.
+ * failures at login time, so catch it before bundling. The compared audience is
+ * the login API audience; the NEAR Auth signing audience is client-only and is
+ * requested solely for transaction signatures.
  */
 export function validateClientServerAuthConsistency(
   server: ServerAuthConfig,

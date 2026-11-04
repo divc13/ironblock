@@ -122,6 +122,14 @@ shared testnet Auth0 client `np8paqIpMWmNbzT4xAvOOapZBjsOpptl`.
   were available in this environment. This was **not** a code-path failure: the
   flow reached the external identity provider correctly. Do not record this as a
   successful real Auth0 login.
+- A human retry surfaced Auth0 `access_denied` with
+  `Signing audience requested without transaction payload`. The login popup was
+  requesting the NEAR Auth signing audience (`auth0.jwt.fast-auth.testnet`),
+  which Auth0 only issues when the request carries a `transaction` or
+  `delegateAction` payload. Login now requests the Auth0 API audience
+  (`https://api.testnet.fast-auth.com`); the signing audience remains configured
+  for future transaction signatures. A successful login after this change still
+  needs a human retry with real credentials.
 - Separately, a locally signed test session (not an Auth0 login) was used to
   exercise session restore and the RPGJS socket. The client restored the
   session, the WebSocket authenticated, and the server created the map room.

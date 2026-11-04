@@ -33,7 +33,7 @@ class IronblockJavascriptProvider extends JavascriptProvider {
       network: "testnet",
       clientId: clientNearAuthConfig.clientId,
       domain: clientNearAuthConfig.domain,
-      signingAudience: clientNearAuthConfig.audience,
+      signingAudience: clientNearAuthConfig.signingAudience,
     },
   ) {
     super(providerOptions);
@@ -49,6 +49,11 @@ class IronblockJavascriptProvider extends JavascriptProvider {
    * Open Auth0's popup. `connection` is only set for the explicit Google
    * button; the email button leaves it undefined so the shared tenant decides
    * which email/password or passwordless connections it supports.
+   *
+   * Request the login API audience here, not the NEAR Auth signing audience.
+   * The shared tenant returns `access_denied` ("Signing audience requested
+   * without transaction payload") if the signing audience is requested without
+   * a `transaction`/`delegateAction` payload.
    */
   async loginWithConnection(connection?: string): Promise<string> {
     await this.auth0.loginWithPopup({
@@ -66,8 +71,8 @@ class IronblockJavascriptProvider extends JavascriptProvider {
     return claims.sub;
   }
 
-  /** Auth0 access token for the NEAR Auth signing audience. */
-  async getSigningToken(): Promise<string> {
+  /** Auth0 access token for the login API audience verified by the server. */
+  async getLoginToken(): Promise<string> {
     const token = await this.auth0.getTokenSilently({
       authorizationParams: {
         audience: clientNearAuthConfig.audience,
@@ -140,7 +145,7 @@ export async function loginWithNearAuth(
 
   let accessToken: string;
   try {
-    accessToken = await auth.provider.getSigningToken();
+    accessToken = await auth.provider.getLoginToken();
   } catch (error) {
     logAuth0LoginFailure(error);
     throw new NearAuthFlowError(

@@ -3,6 +3,7 @@ import {
   loadServerAuthConfig,
   validateClientServerAuthConsistency,
 } from "../../src/server/auth/config";
+import { NEAR_AUTH_TESTNET_DEFAULTS } from "../../src/shared/auth/defaults";
 
 const VALID_SECRET = "test-session-secret-that-is-long-enough-1234567890";
 
@@ -14,11 +15,23 @@ describe("loadServerAuthConfig", () => {
 
     expect(config.domain).toBe("login.testnet.fast-auth.com");
     expect(config.issuer).toBe("https://login.testnet.fast-auth.com/");
-    expect(config.audience).toBe("auth0.jwt.fast-auth.testnet");
+    expect(config.audience).toBe("https://api.testnet.fast-auth.com");
     expect(config.jwksUri).toBe(
       "https://login.testnet.fast-auth.com/.well-known/jwks.json",
     );
     expect(config.sessionTtlSeconds).toBe(3600);
+  });
+
+  it("separates the login API audience from the NEAR Auth signing audience", () => {
+    expect(NEAR_AUTH_TESTNET_DEFAULTS.audience).toBe(
+      "https://api.testnet.fast-auth.com",
+    );
+    expect(NEAR_AUTH_TESTNET_DEFAULTS.signingAudience).toBe(
+      "auth0.jwt.fast-auth.testnet",
+    );
+    expect(NEAR_AUTH_TESTNET_DEFAULTS.signingAudience).not.toBe(
+      NEAR_AUTH_TESTNET_DEFAULTS.audience,
+    );
   });
 
   it("accepts a matching custom domain and issuer", () => {

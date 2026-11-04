@@ -100,7 +100,7 @@ function translateJoseError(error: unknown): AuthError {
       return new AuthError(
         "INVALID_AUDIENCE",
         401,
-        "Auth0 token audience is not the NEAR Auth signing audience",
+        "Auth0 token audience is not the configured login API audience",
       );
     }
     if (claim === "iss") {

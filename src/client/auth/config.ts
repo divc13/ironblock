@@ -11,7 +11,10 @@ export interface ClientNearAuthConfig {
   network: "testnet";
   clientId: string;
   domain: string;
+  /** Auth0 API audience for the server-verified login access token. */
   audience: string;
+  /** NEAR Auth guard audience, used only for transaction signatures. */
+  signingAudience: string;
   rpcUrl: string;
   fastAuthContractId: string;
   mpcContractId: string;
@@ -42,6 +45,9 @@ export const clientNearAuthConfig: ClientNearAuthConfig = {
   audience:
     import.meta.env.VITE_NEAR_AUTH_AUDIENCE ??
     NEAR_AUTH_TESTNET_DEFAULTS.audience,
+  signingAudience:
+    import.meta.env.VITE_NEAR_AUTH_SIGNING_AUDIENCE ??
+    NEAR_AUTH_TESTNET_DEFAULTS.signingAudience,
   rpcUrl:
     import.meta.env.VITE_NEAR_RPC_URL ?? NEAR_AUTH_TESTNET_DEFAULTS.rpcUrl,
   fastAuthContractId:

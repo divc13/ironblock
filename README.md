@@ -232,7 +232,10 @@ prompt is involved.
 ## Authentication flow
 
 1. The RPGJS client boots with `deferConnection: true`, then shows the login overlay.
-2. The player signs in through the Auth0 popup (Google or email).
+2. The player signs in through the Auth0 popup (Google or email). The popup
+   requests the login API audience (`https://api.testnet.fast-auth.com`), not
+   the NEAR Auth signing audience: the signing audience is only valid on
+   requests that carry a transaction payload.
 3. The client compares the ID-token `sub` with the access-token `sub` and fails
    clearly if Auth0 returns inconsistent identities. The MPC path uses the
    ID-token subject; the server uses the independently verified access-token
@@ -241,8 +244,8 @@ prompt is involved.
    testnet MPC signer. No private key reaches the browser or this app.
 5. The browser sends the Auth0 **access token** and the MPC public key to
    `POST /api/auth/near` (or `<base>/api/auth/near`).
-6. The server verifies the Auth0 token with Auth0's JWKS (RS256, issuer,
-   audience, expiry, subject), recomputes
+6. The server verifies the Auth0 token with Auth0's JWKS (RS256, issuer, login
+   API audience, expiry, subject), recomputes
    `jwt#https://login.testnet.fast-auth.com/#<sub>`, reads
    `derived_public_key` from the MPC contract, and compares it with the client key.
 7. The server maps the Auth0 `sub` to a stable pseudonymous player id, records the
@@ -259,6 +262,12 @@ per-tab, so a second tab normally asks for login separately. If storage is
 unavailable, an in-memory cache lets the current page connect, but a reload
 requires signing in again. Auth0 email may be absent; the display name then
 falls back to a short public subject hash.
+
+The login token is scoped to the Auth0 API audience, not the NEAR Auth signing
+audience. Auth0 rejects a signing-audience request that does not carry a
+`transaction` or `delegateAction` payload with `access_denied`; future
+transaction-signing flows must request `VITE_NEAR_AUTH_SIGNING_AUDIENCE`
+separately through the NEAR Auth SDK.
 
 ## Settlement (testnet)
 
@@ -298,7 +307,8 @@ Public browser values (safe to ship):
 | `VITE_NEAR_AUTH_NETWORK` | `testnet`; any other value is rejected |
 | `VITE_NEAR_AUTH_CLIENT_ID` | shared NEAR Auth testnet client id |
 | `VITE_NEAR_AUTH_DOMAIN` | `login.testnet.fast-auth.com` |
-| `VITE_NEAR_AUTH_AUDIENCE` | `auth0.jwt.fast-auth.testnet` |
+| `VITE_NEAR_AUTH_AUDIENCE` | `https://api.testnet.fast-auth.com`; login token audience |
+| `VITE_NEAR_AUTH_SIGNING_AUDIENCE` | `auth0.jwt.fast-auth.testnet`; transaction signatures only |
 | `VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID` | `fast-auth.testnet` |
 | `VITE_NEAR_AUTH_MPC_CONTRACT_ID` | `v1.signer-prod.testnet` |
 
@@ -308,7 +318,7 @@ Server-only values:
 | --- | --- |
 | `NEAR_AUTH_DOMAIN` | `login.testnet.fast-auth.com`; hostname only |
 | `NEAR_AUTH_ISSUER` | must equal `https://${NEAR_AUTH_DOMAIN}/` |
-| `NEAR_AUTH_AUDIENCE` | must match the client audience |
+| `NEAR_AUTH_AUDIENCE` | must match the client login API audience |
 | `NEAR_AUTH_JWKS_URL` | HTTPS URL on the same host as the domain |
 | `NEAR_AUTH_RPC_URL` | `https://rpc.testnet.near.org` |
 | `NEAR_AUTH_FAST_AUTH_CONTRACT_ID` | `fast-auth.testnet` |
