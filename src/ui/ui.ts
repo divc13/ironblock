@@ -1,4 +1,9 @@
 import { economy } from '../config/economy'
+import { readNearAuthSession } from '../client/auth/near-auth'
+import {
+  mountWithdrawPanel,
+  type WithdrawPanel,
+} from '../client/settlement/withdraw-panel'
 import type {
   EconomyClient,
   EconomySnapshot,
@@ -174,6 +179,21 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   hudButton('Orders', 'O', () => ui.openOrders())
   hudButton('Week', 'F', () => ui.openFastForward())
   hudButton('Recap', 'R', () => void ui.openRecap())
+  const withdrawButton = button('Withdraw to NEAR', openWithdraw, {
+    className: 'ib-hud-button',
+  })
+  withdrawButton.title = 'Withdraw game items to your NEAR testnet account'
+  actions.append(withdrawButton)
+
+  // Root-relative to Vite's BASE_URL so subpath builds open the right page.
+  const spectatorLink = document.createElement('a')
+  spectatorLink.className = 'ib-hud-button'
+  spectatorLink.href = `${(import.meta.env.BASE_URL || '/').replace(/\/$/, '')}/spectator`
+  spectatorLink.target = '_blank'
+  spectatorLink.rel = 'noopener noreferrer'
+  spectatorLink.textContent = 'Spectator ↗'
+  spectatorLink.title = 'Open the read-only market spectator dashboard'
+  actions.append(spectatorLink)
 
   hud.append(brand, stats, actions)
 
@@ -215,9 +235,28 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   const banner = $('div', 'ib-banner')
   banner.hidden = true
 
+  const withdrawOverlay = $('div', 'ib-withdraw-overlay')
+  withdrawOverlay.hidden = true
+  withdrawOverlay.setAttribute('role', 'dialog')
+  withdrawOverlay.setAttribute('aria-modal', 'true')
+  withdrawOverlay.setAttribute('aria-label', 'Withdraw to NEAR')
+
+  const withdrawCard = $('section', 'ib-withdraw-card')
+  const withdrawHead = $('div', 'ib-withdraw-head')
+  const withdrawTitle = $('h2', undefined, 'Withdraw to NEAR')
+  const withdrawClose = button('×', closeWithdraw, {
+    className: 'ib-close',
+    title: 'Close withdraw panel',
+  })
+  withdrawClose.setAttribute('aria-label', 'Close withdraw panel')
+  withdrawHead.append(withdrawTitle, withdrawClose)
+  const withdrawBody = $('div', 'ib-withdraw-body')
+  withdrawCard.append(withdrawHead, withdrawBody)
+  withdrawOverlay.append(withdrawCard)
+
   const modeChip = $('span', 'ib-chip', client.mode === 'server' ? 'Live market' : 'Mock market')
 
-  root.append(hud, ticker, prompt, toasts, scrim, panel, tooltip, banner)
+  root.append(hud, ticker, prompt, toasts, scrim, panel, tooltip, banner, withdrawOverlay)
   document.body.append(root)
 
   if (options.fellBackToMock && options.note) {
@@ -323,6 +362,36 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     if (lastFocused?.isConnected) lastFocused.focus({ preventScroll: true })
     lastFocused = null
     document.dispatchEvent(new CustomEvent('ironblock:panel-closed'))
+  }
+
+  /* --------------------------- withdraw overlay -------------------------- */
+
+  let withdrawPanel: WithdrawPanel | null = null
+
+  function closeWithdraw(): void {
+    if (withdrawOverlay.hidden) return
+    withdrawPanel?.destroy()
+    withdrawPanel = null
+    withdrawBody.replaceChildren()
+    withdrawOverlay.hidden = true
+  }
+
+  function openWithdraw(): void {
+    if (!withdrawOverlay.hidden) {
+      void withdrawPanel?.refresh()
+      return
+    }
+    withdrawOverlay.hidden = false
+    withdrawPanel = mountWithdrawPanel({
+      container: withdrawBody,
+      // Same base as the game, so subpath builds hit the right API.
+      apiBase: import.meta.env.BASE_URL,
+      getSessionToken: () => readNearAuthSession()?.sessionToken,
+      onSessionNeeded: () =>
+        ui.toast('Sign in with NEAR Auth to withdraw items.', 'bad'),
+    })
+    // Pull the current on-chain/ledger state whenever the action is opened.
+    void withdrawPanel.refresh()
   }
 
   const showPanel = (kind: PanelKind, shell: PanelShell): HTMLElement => {
@@ -1374,6 +1443,18 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented) return
+    if (!withdrawOverlay.hidden) {
+      if (event.key === 'Escape') {
+        closeWithdraw()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+      } else if (!isTypingTarget(event.target) && isGameKey(event)) {
+        // Freeze movement/action keys while the withdrawal dialog is open.
+        event.preventDefault()
+        event.stopImmediatePropagation()
+      }
+      return
+    }
     if (event.key === 'Escape') {
       if (!tooltip.hidden) {
         hideTooltip()
@@ -1426,6 +1507,11 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
   const onScrimClick = () => closePanel()
   scrim.addEventListener('click', onScrimClick)
+
+  const onWithdrawOverlayClick = (event: MouseEvent) => {
+    if (event.target === withdrawOverlay) closeWithdraw()
+  }
+  withdrawOverlay.addEventListener('click', onWithdrawOverlayClick)
 
   /* -------------------------------- api ---------------------------------- */
 
@@ -1508,6 +1594,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('resize', hideTooltip)
       scrim.removeEventListener('click', onScrimClick)
+      withdrawOverlay.removeEventListener('click', onWithdrawOverlayClick)
+      closeWithdraw()
       fastForwardUnsub?.()
       unsubscribe()
       root.remove()

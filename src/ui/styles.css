@@ -1099,6 +1099,66 @@
   pointer-events: auto;
 }
 
+/* Withdraw dialog ------------------------------------------------------- */
+
+.ib-withdraw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(10, 8, 5, 0.66);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.ib-withdraw-overlay[hidden] {
+  display: none;
+}
+
+.ib-withdraw-card {
+  width: min(620px, 94vw);
+  max-height: min(84vh, 820px);
+  display: flex;
+  flex-direction: column;
+  background: var(--ib-parchment);
+  color: var(--ib-ink);
+  border: 2px solid #6f5a33;
+  border-radius: 14px;
+  box-shadow: var(--ib-shadow);
+  overflow: hidden;
+}
+
+.ib-withdraw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px 12px;
+  background: linear-gradient(180deg, #2a2218, #201a13);
+  color: #f8efdb;
+  border-bottom: 3px solid var(--ib-brass);
+}
+
+.ib-withdraw-head h2 {
+  margin: 0;
+  font-family: var(--ib-serif);
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+}
+
+.ib-withdraw-body {
+  padding: 14px 18px 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+a.ib-hud-button {
+  text-decoration: none;
+}
+
 .ib-visually-hidden {
   position: absolute;
   width: 1px;

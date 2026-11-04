@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   CraftActionData,
   EconomyActionError,
+  EconomyWorldState,
   GatherActionData,
   InvestActionData,
   MerchantRuntimeState,
@@ -304,9 +305,17 @@ function buildSnapshot(
   const state = service.snapshot();
   const config = service.config;
   const events = recentEvents(service);
+  const ownPlayer = state.players[playerId] ?? null;
+  // Authenticated callers only receive their own player entry. Other players'
+  // (and bots') inventories/cash stay server-side; merchants, resources,
+  // clock/seed and public events are still included.
+  const publicState: EconomyWorldState = {
+    ...state,
+    players: ownPlayer ? { [playerId]: ownPlayer } : {},
+  };
   return {
-    state,
-    player: state.players[playerId] ?? null,
+    state: publicState,
+    player: ownPlayer,
     merchants: merchantsInStallOrder(config, state.merchants),
     events,
     sequence: state.sequence,
