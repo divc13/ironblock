@@ -1,5 +1,6 @@
 import { RpgPlayer, type RpgPlayerHooks } from '@rpgjs/server'
 import type { GameAuthData } from '../../server/auth/game-auth'
+import { world } from '../../config/world'
 
 declare module '@rpgjs/server' {
     interface RpgPlayer {
@@ -22,12 +23,15 @@ export const player: RpgPlayerHooks<GameAuthData> = {
         }
     },
     onConnected(player: RpgPlayer) {
-        player.changeMap('simplemap', {
-            x: 300,
-            y: 300
+        player.changeMap(world.mapId, {
+            x: world.spawn.x,
+            y: world.spawn.y
         })
+        // `onAuthSuccess` runs before `onConnected`, so an authenticated
+        // display name (or derived account hash) wins; anonymous/warmup
+        // connections fall back to a generic wanderer name.
         if (!player.name) {
-            player.name = player.nearAccountId?.slice(0, 10) ?? 'Player'
+            player.name = player.nearAccountId?.slice(0, 10) ?? 'Wanderer'
         }
         player.setGraphic('hero')
     },
