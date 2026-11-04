@@ -8,13 +8,9 @@ import type {
   RecapMerchantStanding,
   SequencedMarketEvent,
 } from '../server/observability'
-import {
-  buildPlayerAliases,
-  buildProofPayload,
-  buildRecap,
-  buildTape,
-  explorerUrlFor,
-} from '../server/observability'
+import { buildPlayerAliases, buildTape } from '../server/observability/sanitize'
+import { buildProofPayload, explorerUrlFor } from '../server/observability/proof'
+import { buildRecap } from '../server/observability/recap'
 import type { EconomyConfig, ItemId, MarketEventType, MerchantId } from '../shared/types'
 import { createFeed, type MarketFeed, type MarketStreamMessage } from './api'
 import { FastForwardPlayback, type PlaybackItem, type PlaybackProgress } from './playback'
