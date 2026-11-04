@@ -13,17 +13,29 @@ minute walkthrough.
 
 ## Status
 
-**Phase 2 integrated** on `feat/integration-phase2`: data-driven economy
-foundation, NEAR Auth testnet login, the deployed NEP-245 v2 items contract,
-the playable market loop, the spectator dashboard and the economy-backed
-settlement bridge. See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the
-merge record, final testnet IDs and known blockers.
+**Phase 2 integrated and shipped on `main`:** data-driven economy foundation,
+NEAR Auth testnet login, the deployed NEP-245 v2 items contract, the playable
+market loop, a live autonomous NPC town, the standalone spectator dashboard and
+the economy-backed settlement bridge. See
+[`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the merge record, final testnet
+IDs and known blockers.
 
 Implemented:
 
 - Data-only economy configuration (`src/config/economy.ts`) with validated
   bootstrap (`src/config/config.server.ts`), pricing rules, market events and
   a `npm run config:check` gate plus 30+ foundation tests.
+- Eight merchant agents, including noir fixer **Sable Voss** and smuggler
+  **Rook Kestrel**, each with their own cash, stock, pricing personality and
+  generated stall.
+- Eight named townsfolk — Marlowe Vane, Calla Morn, Don Ottavio, Rhea Vance,
+  Yuri Blaine, Trinity Vale, Bram Sol and Ines Calder — with four ambient
+  characters standing in the market square and the full roster in the in-game
+  Townsfolk panel and the spectator dashboard.
+- One process-wide **live NPC loop** in production, dev and preview. Bots gather,
+  trade and deliver orders; merchants restock and pay rent; caravans arrive on
+  their own. The loop advances 1 in-game second per real second, serializes with
+  player actions and fast-forward, and batches disk writes.
 - “Continue with Google” and “Continue with email” login overlay in the RPGJS client.
 - Auth0 popup login through the official NEAR Auth browser SDK.
 - MPC-derived ed25519 public key for the signed-in Auth0 subject.
@@ -43,7 +55,8 @@ Implemented:
   Every item in `src/config/economy.ts` references
   `nep245:v2.ironblock-items.testnet:<tokenId>` with the deployed symbol.
 
-Phase 2 adds the playable market loop, world UI, spectator dashboard and the
+Phase 2 adds the playable market loop, world UI, a standalone spectator build
+(it no longer loads the RPGJS canvas client), named merchants/townsfolk and the
 testnet settlement bridge. The judge-facing path is
 [`docs/DEMO.md`](docs/DEMO.md). The project is testnet-only; no real money is
 used or custodied.
@@ -83,8 +96,10 @@ npm run dev
 ```
 
 Open exactly <http://localhost:3000>. The first successful Auth0 login reloads
-the page once by design; wait for the town and the “Live market” chip. The full
-walkthrough is in [`docs/DEMO.md`](docs/DEMO.md).
+the page once by design; wait for the town and the “Live market” chip. The
+market keeps moving while you watch: press **T** for the Townsfolk roster and
+watch the Market Wire for their gather/trade/order events. The full walkthrough
+is in [`docs/DEMO.md`](docs/DEMO.md).
 
 The port is deliberate: the shared NEAR Auth testnet Auth0 application allows
 `http://localhost:3000` as a callback URL. `localhost` and port `3000` must match

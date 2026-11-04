@@ -116,8 +116,8 @@ Google/email account to confirm a full login.
 
 ## Phase 2 final status
 
-Phase 2 is integrated on `feat/integration-phase2` (final commit `d115ef7`
-before the docs merge). It adds:
+Phase 2 is integrated on `feat/integration-phase2` and shipped on `main`. It
+adds:
 
 - the tuned, deterministic economy engine and service (`feat/economy-tuning`);
 - the playable market-square world, gather/craft/trade/invest UI
@@ -132,9 +132,20 @@ before the docs merge). It adds:
   [`DEMO.md`](DEMO.md), [`PRICING.md`](PRICING.md) and
   [`HOSTING.md`](HOSTING.md).
 
-Final integrated checks: `npm test` 250/250, `npm run config:check`, seven-day
-simulation (2 bankruptcies, 1 investment, 415 order units), production build,
-and production probes for auth, economy, spectator and settlement health.
+### Post-integration follow-ups
+
+| Branch | Commit | What changed |
+| --- | --- | --- |
+| `feat/spectator-standalone` | `9d9d567` | The built dashboard gets its own `spectator-*.js`; RPGJS no longer injects the game canvas into `/spectator`. A regression check fails the build if the game client reappears. |
+| `feat/npc-live-loop` | `6e375ee` | One process-wide recursive live loop advances bots, restocks, caravans, rent and order deliveries without player input. Ticks serialize with player actions/fast-forward and batch disk writes. |
+| `feat/merchant-characters` | `94a5aa3` | Added Sable Voss (fixer, stall 7) and Rook Kestrel (smuggler, stall 8), with explicit map positions, generated signs and updated seven-day numbers. |
+| `feat/townsfolk-characters` | `1380d80` | Added an eight-person, data-only townsfolk roster; names flow into bot events, the in-game Townsfolk panel and the spectator tape. Four ambient characters and name signs stand in the market square. |
+
+Final integrated checks: `npm test` **261/261**, `npm run config:check`,
+seven-day simulation (**2 bankruptcies, 1 investment, 415 order units**),
+production build, a live snapshot probe showing bot trades advancing without
+player input, and a standalone spectator build check. Production probes cover
+auth, economy, spectator and settlement health.
 
 Still honest limitations:
 

@@ -36,6 +36,15 @@ The plugin mounts itself for **dev** (`configureServer`), **preview**
   HTML input. The RPGJS build writes it beside the game entry
   (`dist/client/spectator.html`); the production mount also checks
   `dist/spectator.html`.
+- standalone browser entry: `spectatorStandalonePlugin()` runs after the RPGJS
+  HTML transform and restores `src/spectator/main.ts` for the dashboard. The
+  built page loads only its own `spectator-*.js`/`.css`, never the game
+  `client-*.js` or `canvasengine-*.js`. The build fails if that regresses.
+
+The dashboard includes a Townsfolk roster (names, archetypes and one-line
+character beats) and the Market Tape labels each bot trade with its roster
+name. This is presentation only; it reads the same sanitized public snapshot
+as the rest of the dashboard.
 
 Plugin options (`ObservabilityPluginOptions`):
 

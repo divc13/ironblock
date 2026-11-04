@@ -76,12 +76,17 @@ prices or balances as live.
 
 **What to point at first**
 
-- The market square has eight merchant stalls and four resource areas. The two
-  newest stalls, Sable Voss (fixer) and Rook Kestrel (smuggler), sit on the
-  bottom row.
+- The market square has eight merchant stalls, four resource areas and four
+  ambient townsfolk. The two newest stalls, Sable Voss (fixer) and Rook Kestrel
+  (smuggler), sit on the bottom row. Rhea Vance, Trinity Vale, Bram Sol and Ines
+  Calder stand near the centre; talk to them for a one-line character beat.
 - The HUD shows **Cash**, **Carry**, **Stamina**, **Day** and **Town**, plus
-  **Bag (I)**, **Orders (O)**, **Week (F)** and **Recap (R)**.
+  **Bag (I)**, **Orders (O)**, **Townsfolk (T)**, **Week (F)** and **Recap (R)**.
 - The **Market Wire** feed on the right records every trade and price move.
+  The eight named townsfolk keep acting on their own while you explore, so the
+  feed fills without waiting for a player trade. Open **Townsfolk (T)** to meet
+  Marlowe Vane, Calla Morn, Don Ottavio, Rhea Vance, Yuri Blaine, Trinity Vale,
+  Bram Sol and Ines Calder.
 
 **Gather 10×**
 
@@ -159,6 +164,11 @@ rivals, clamps and rounding. The tooltip is the arithmetic, in order.”
 ---
 
 ## Scene 3 — Seven days in under a minute (≈105 s)
+
+The town is already alive: the live NPC loop advances one in-game second per
+real second, so bots are gathering, trading and delivering orders before you
+press anything. Fast-forward compresses the next seven days into the same
+deterministic engine.
 
 **Run it**
 
