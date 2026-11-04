@@ -6,10 +6,16 @@ Players gather materials and trade with NPC merchant agents. Each merchant has i
 
 ## Status
 
-**Phase 1: NEAR Auth testnet login spike + server-issued player identity/session.**
+**Phase 1 integrated** on `feat/integration-phase1`: data-driven economy
+foundation, NEAR Auth testnet login and the deployed NEP-245 v2 items contract.
+See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the merge record, final
+testnet IDs and known blockers.
 
 Implemented:
 
+- Data-only economy configuration (`src/config/economy.ts`) with validated
+  bootstrap (`src/config/config.server.ts`), pricing rules, market events and
+  a `npm run config:check` gate plus 30+ foundation tests.
 - “Continue with Google” and “Continue with email” login overlay in the RPGJS client.
 - Auth0 popup login through the official NEAR Auth browser SDK.
 - MPC-derived ed25519 public key for the signed-in Auth0 subject.
@@ -22,8 +28,16 @@ Implemented:
 - In-process per-IP/per-subject login limits and MPC concurrency limits.
 - Built production host that serves the client, auth API and authoritative game socket.
 - No wallet extension, seed phrase, wallet popup or gas prompt in the normal start.
+- NEP-245 items contract deployed on testnet at
+  [`v2.ironblock-items.testnet`](https://explorer.testnet.near.org/accounts/v2.ironblock-items.testnet)
+  (13 tokens, 533,000 genesis supply, owner and treasury recorded in
+  [`contracts/nep245/deployments/testnet.json`](contracts/nep245/deployments/testnet.json)).
+  Every item in `src/config/economy.ts` references
+  `nep245:v2.ironblock-items.testnet:<tokenId>` with the deployed symbol.
 
-Not implemented yet: economy, NEP-245 contract, merchant agents and the game loop. The project is testnet-only; no real money is used or custodied.
+Not implemented yet: the live merchant/game loop on top of the config
+(Phase 2 economy), world UI, settlement flow and observability. The project is
+testnet-only; no real money is used or custodied.
 
 ## Stack
 
@@ -84,6 +98,8 @@ The client derives its login path from Vite's `BASE_URL`, so it posts to
 ## Tests
 
 ```bash
+npm run config:check        # validate the economy config
+npm run test:unit           # economy foundation tests (pricing, validation, bootstrap)
 npm run test:auth           # JWT, MPC identity, sessions, logout, socket, rate limits
 npm run test:production     # standalone asset smoke test (RPG_TYPE=rpg)
 npm run test:production:auth # built preview + production auth probe
@@ -133,7 +149,7 @@ Public browser values (safe to ship):
 | --- | --- |
 | `VITE_NEAR_NETWORK` | `testnet` |
 | `VITE_NEAR_RPC_URL` | `https://rpc.testnet.near.org` |
-| `VITE_NEP245_CONTRACT_ID` | `items.ironblock.testnet` (future economy) |
+| `VITE_NEP245_CONTRACT_ID` | `v2.ironblock-items.testnet` (deployed v2 contract) |
 | `VITE_NEAR_AUTH_NETWORK` | `testnet`; any other value is rejected |
 | `VITE_NEAR_AUTH_CLIENT_ID` | shared NEAR Auth testnet client id |
 | `VITE_NEAR_AUTH_DOMAIN` | `login.testnet.fast-auth.com` |
@@ -175,8 +191,8 @@ The rate limiter is in-process; a multi-process deployment needs a shared limite
 trusted automatically; configure a trusted proxy/limiter in front if needed.
 
 `NEAR_TREASURY_ACCOUNT_ID` and `NEAR_TREASURY_PRIVATE_KEY` are reserved for the
-future economy and are not used by the auth spike. Never expose or commit the
-private key.
+future economy (settlement targets `v2.ironblock-treasury.testnet`) and are not
+used by the auth flow. Never expose or commit the private key.
 
 ## Security notes
 
