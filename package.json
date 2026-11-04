@@ -6,13 +6,19 @@
     "dev": "vite",
     "build": "vite build",
     "start": "node scripts/start-production.mjs",
-    "test": "npm run test:auth && npm run test:settlement && npm run test:production && npm run test:production:auth",
+    "config:check": "tsx scripts/check-config.ts",
+    "test": "npm run test:auth && npm run test:settlement && npm run test:economy && npm run test:bootstrap && npm run test:config && npm run test:production && npm run test:production:auth",
     "test:auth": "vitest run --config vitest.config.ts",
     "test:settlement": "vitest run --config vitest.settlement.config.ts",
+    "test:economy": "tsx --test test/economy.test.ts test/economy-engine.test.ts test/economy-persistence.test.ts test/economy-demo.test.ts",
+    "test:bootstrap": "tsx --test test/bootstrap.test.ts",
+    "test:config": "tsx --test test/config-validation.test.ts",
     "test:production": "RPG_TYPE=rpg node --test test/production-preview.test.mjs",
     "test:production:auth": "node --test test/production-auth.test.mjs",
     "test:production:settlement": "RPG_TYPE=rpg node --test test/production-settlement.test.mjs",
-    "smoke:settlement": "node scripts/settlement-smoke.mjs"
+    "smoke:settlement": "node scripts/settlement-smoke.mjs",
+    "sim": "tsx scripts/sim.ts",
+    "economy:reset": "tsx scripts/economy-reset.ts"
   },
   "keywords": [
     "near",
@@ -26,9 +32,11 @@
   "description": "Ironblock - a small market town with an observable NPC-run economy.",
   "devDependencies": {
     "@canvasengine/compiler": "2.5.0",
+    "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-vue": "^6.0.10",
     "path-browserify": "^1.0.1",
+    "tsx": "^4.23.15",
     "vite": "^8.3.5",
     "vitest": "^4.1.12"
   },
@@ -50,7 +58,8 @@
     "jose": "^6.2.15",
     "near-api-js": "^5.1.1",
     "pixi.js": "^8.22.0",
-    "ws": "^8.22.1"
+    "ws": "^8.22.1",
+    "zod": "^4.6.7"
   },
   "type": "module"
 }

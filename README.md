@@ -48,6 +48,22 @@ The port is deliberate: the shared NEAR Auth testnet Auth0 application allows
 exactly. Use the manual checklist in
 [`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md).
 
+The default economy config runs the deterministic `demoScenario` story. To run the
+stable sandbox economy instead, use the exported switch:
+
+```ts
+import { economy, stableSandboxScenario } from './src/config/economy'
+import type { EconomyConfig } from './src/shared/types'
+
+const config: EconomyConfig = {
+  ...economy,
+  scenario: stableSandboxScenario,
+}
+```
+
+`npm run sim` uses the default demo scenario and prints bankruptcies, rescue
+investments, order deliveries, caravan impact and top movers.
+
 ## Build, preview and production start
 
 ```bash
