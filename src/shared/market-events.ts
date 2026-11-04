@@ -1,3 +1,4 @@
+import { stableHash64, stableStringify } from './stable-hash'
 import type {
   EventActor,
   EventCauseType,
@@ -16,29 +17,42 @@ export interface CreateMarketEventInput {
   item?: ItemId | null
   quantity?: number | null
   price?: number | null
-  before?: Partial<MarketEventSnapshot>
-  after?: Partial<MarketEventSnapshot>
+  before: MarketEventSnapshot
+  after: MarketEventSnapshot
   reasons?: PriceReason[]
   cause: EventCauseType
   causeId: string
   message?: string
 }
 
-const snapshot = (value: Partial<MarketEventSnapshot> | undefined): MarketEventSnapshot => ({
-  stock: value?.stock ?? 0,
-  cash: value?.cash ?? 0,
-  bid: value?.bid ?? 0,
-  ask: value?.ask ?? 0,
-})
+const snapshotFields = ['stock', 'cash', 'bid', 'ask'] as const
 
-/** Small stable hash so event ids are deterministic for a deterministic sim. */
-const stableHash = (value: string): string => {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
+/**
+ * Snapshots are required in full. Missing fields are a caller bug: silently
+ * replacing them with zero would corrupt event history and id hashing.
+ */
+const normalizeSnapshot = (
+  value: MarketEventSnapshot,
+  label: 'before' | 'after',
+): MarketEventSnapshot => {
+  if (value === null || typeof value !== 'object') {
+    throw new Error(`${label} snapshot is required`)
   }
-  return (hash >>> 0).toString(16).padStart(8, '0')
+
+  const result = {} as MarketEventSnapshot
+  for (const field of snapshotFields) {
+    const fieldValue = value[field]
+    if (fieldValue === undefined) {
+      throw new Error(
+        `${label}.${field} is required; use null when the field is not applicable`,
+      )
+    }
+    if (fieldValue !== null && !Number.isFinite(fieldValue)) {
+      throw new Error(`${label}.${field} must be finite or null`)
+    }
+    result[field] = fieldValue
+  }
+  return result
 }
 
 const defaultMessage = (input: CreateMarketEventInput): string => {
@@ -54,18 +68,21 @@ const defaultMessage = (input: CreateMarketEventInput): string => {
  * sinks, caravan arrivals and fast-forward snapshots.
  *
  * Callers may pass an explicit id when they already have a durable event id.
- * Otherwise the id is derived deterministically from the event contents.
+ * Otherwise the id is derived deterministically from the complete event
+ * contents, including reasons and message, using a 64-bit hash.
  */
 export function createMarketEvent(input: CreateMarketEventInput): MarketEvent {
   const item = input.item ?? null
   const quantity = input.quantity ?? null
   const price = input.price ?? null
-  const before = snapshot(input.before)
-  const after = snapshot(input.after)
+  const before = normalizeSnapshot(input.before, 'before')
+  const after = normalizeSnapshot(input.after, 'after')
+  const reasons = input.reasons ?? []
+  const message = input.message ?? defaultMessage(input)
   const id =
     input.id ??
-    `evt_${stableHash(
-      JSON.stringify({
+    `evt_${stableHash64(
+      stableStringify({
         time: input.time,
         type: input.type,
         actor: input.actor,
@@ -74,8 +91,10 @@ export function createMarketEvent(input: CreateMarketEventInput): MarketEvent {
         price,
         before,
         after,
+        reasons,
         cause: input.cause,
         causeId: input.causeId,
+        message,
       }),
     )}`
 
@@ -89,10 +108,10 @@ export function createMarketEvent(input: CreateMarketEventInput): MarketEvent {
     price,
     before,
     after,
-    reasons: input.reasons ?? [],
+    reasons,
     cause: input.cause,
     causeId: input.causeId,
-    message: input.message ?? defaultMessage(input),
+    message,
   }
 }
 

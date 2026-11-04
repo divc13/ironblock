@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "config:check": "tsx scripts/check-config.ts",
-    "test": "tsx --test test/economy.test.ts test/config-validation.test.ts",
+    "test": "tsx --test test/*.test.ts",
     "test:production": "node --test test/production-preview.test.mjs"
   },
   "keywords": [

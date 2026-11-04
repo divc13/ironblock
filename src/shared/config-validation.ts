@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { priceBoundsFor } from './price-bounds'
 import type { EconomyConfig } from './types'
 
 /* -------------------------------------------------------------------------- */
@@ -202,6 +203,7 @@ const pricingSchema = z
         weight: nonNegative,
         maxAdjustment: ratio,
         maxRivals: z.number().int().nonnegative(),
+        rotationSeconds: positive,
       })
       .strict(),
     spread: z
@@ -439,8 +441,13 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
     if (!config.personalities[merchant.personality]) {
       add(`${path}.personality`, `unknown personality id "${merchant.personality}"`)
     }
-    if (merchant.cash <= merchant.reserve) {
-      add(`${path}.cash`, 'merchant must start above its reserve')
+    const effectiveReserve = merchant.reserve * config.pricing.cash.bankruptcyRatio
+    const startingThreshold = Math.max(merchant.reserve, effectiveReserve)
+    if (merchant.cash <= startingThreshold) {
+      add(
+        `${path}.cash`,
+        `merchant must start above its reserve and effective bankruptcy threshold ${startingThreshold}`,
+      )
     }
     if (merchant.margins.sell <= merchant.margins.buy) {
       add(`${path}.margins`, 'sell margin must be greater than buy margin')
@@ -609,16 +616,14 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
   if (pricing.clamps.minUnitPrice > pricing.clamps.maxUnitPrice) {
     add('pricing.clamps', 'minimum unit price must not exceed maximum')
   }
+  if (config.currency.decimals < pricing.rounding.decimals) {
+    add(
+      'currency.decimals',
+      `currency precision must be at least pricing.rounding.decimals (${pricing.rounding.decimals}) so rounded totals cannot exceed cash or reserve limits`,
+    )
+  }
   for (const [itemId, item] of Object.entries(config.items)) {
-    const min = Math.max(
-      item.baseValue * pricing.clamps.minMultiplier,
-      pricing.clamps.minUnitPrice,
-    )
-    const max = Math.min(
-      item.baseValue * pricing.clamps.maxMultiplier,
-      pricing.clamps.maxUnitPrice,
-    )
-    if (min > max) {
+    if (!priceBoundsFor(item, config).valid) {
       add(
         `items.${itemId}.baseValue`,
         'item price cannot fit inside the configured price clamps',
@@ -635,6 +640,17 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
     add(
       'fastForward',
       `fast-forward would run ${totalSteps} steps, above maxSteps ${fastForward.maxSteps}`,
+    )
+  }
+  const maxDaysAtStepSize =
+    (fastForward.maxDays * 86400) / fastForward.stepSeconds
+  if (
+    !Number.isFinite(maxDaysAtStepSize) ||
+    maxDaysAtStepSize > fastForward.maxSteps
+  ) {
+    add(
+      'fastForward.maxDays',
+      `maxDays ${fastForward.maxDays} at ${fastForward.stepSeconds}s/step requires ${maxDaysAtStepSize} steps, above maxSteps ${fastForward.maxSteps}`,
     )
   }
 

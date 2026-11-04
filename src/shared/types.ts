@@ -191,6 +191,8 @@ export interface RivalPricingConfig {
   weight: number
   maxAdjustment: number
   maxRivals: number
+  /** Rotate the deterministic rival sample at this interval. */
+  rotationSeconds: number
 }
 
 export interface SpreadPricingConfig {
@@ -462,10 +464,11 @@ export interface EventActor {
 }
 
 export interface MarketEventSnapshot {
-  stock: number
-  cash: number
-  bid: number
-  ask: number
+  /** Null means the field does not apply to this event, not that it is zero. */
+  stock: number | null
+  cash: number | null
+  bid: number | null
+  ask: number | null
 }
 
 export interface MarketEvent {

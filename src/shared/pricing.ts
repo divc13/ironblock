@@ -1,3 +1,5 @@
+import { priceBoundsFor } from './price-bounds'
+import { stableCompare, stableHashIndex, stableStringify } from './stable-hash'
 import type {
   EconomyConfig,
   ItemConfig,
@@ -52,6 +54,47 @@ const roundTo = (value: number, decimals: number, mode: EconomyConfig['pricing']
 const roundMoney = (value: number, decimals: number, mode: EconomyConfig['pricing']['rounding']['mode']): number =>
   roundTo(value, decimals, mode)
 
+const totalForQuantity = (
+  quantity: number,
+  unitPrice: number,
+  config: EconomyConfig,
+): number =>
+  roundMoney(
+    quantity * unitPrice,
+    config.currency.decimals,
+    config.pricing.rounding.mode,
+  )
+
+/**
+ * Largest quantity whose rounded total does not exceed the available cash.
+ * Checking the rounded total (rather than floor(cash / unitPrice)) keeps buyer
+ * cash and merchant reserve limits safe when currency precision is coarser than
+ * pricing precision.
+ */
+const maxAffordableQuantity = (
+  available: number,
+  unitPrice: number,
+  config: EconomyConfig,
+): number => {
+  if (
+    !Number.isFinite(available) ||
+    !Number.isFinite(unitPrice) ||
+    available <= 0 ||
+    unitPrice <= 0
+  ) {
+    return 0
+  }
+
+  let quantity = Math.max(0, Math.floor(available / unitPrice))
+  while (
+    quantity > 0 &&
+    totalForQuantity(quantity, unitPrice, config) > available
+  ) {
+    quantity -= 1
+  }
+  return quantity
+}
+
 /**
  * Cash pressure is 1 at the reserve floor and falls to 0 once the merchant has
  * `comfortMultiple` reserves of excess cash.
@@ -65,7 +108,7 @@ export function merchantCashPressure(merchant: MerchantState, config: EconomyCon
   return clamp(1 - excess / comfort, 0, 1)
 }
 
-/** A merchant is bankrupt when cash falls to (or below) its configured reserve. */
+/** A merchant is bankrupt when cash falls to (or below) its effective reserve threshold. */
 export function isMerchantBankrupt(merchant: MerchantState, config: EconomyConfig): boolean {
   return merchant.cash <= merchant.reserve * config.pricing.cash.bankruptcyRatio
 }
@@ -96,21 +139,6 @@ interface PricedSide {
   reasons: PriceReason[]
 }
 
-const priceBoundsFor = (
-  item: ItemConfig,
-  config: EconomyConfig,
-): { min: number; max: number } => {
-  const min = Math.max(
-    item.baseValue * config.pricing.clamps.minMultiplier,
-    config.pricing.clamps.minUnitPrice,
-  )
-  const max = Math.min(
-    item.baseValue * config.pricing.clamps.maxMultiplier,
-    config.pricing.clamps.maxUnitPrice,
-  )
-  return { min, max: Math.max(min, max) }
-}
-
 /**
  * Computes one side without consulting rivals. Rival discovery calls this
  * function with includeRivals=false, which keeps the pricing graph acyclic.
@@ -127,6 +155,7 @@ const computeSidePrice = (
 ): PricedSide => {
   const reasons: PriceReason[] = []
   const bounds = priceBoundsFor(item, config)
+  const upperBound = Math.max(bounds.min, bounds.max)
   const targetStock = targetStockFor(merchant, merchantConfig, item.id, config)
   const stock = stockFor(merchant, item.id)
   const demandEma = Math.max(0, merchant.demandEma[item.id] ?? 0)
@@ -268,19 +297,19 @@ const computeSidePrice = (
   })
 
   previous = price
-  const clamped = clamp(price, bounds.min, bounds.max)
+  const clamped = clamp(price, bounds.min, upperBound)
   price = clamped
   reasons.push({
     code: 'clamp',
-    label: clamped === bounds.min ? 'Price floor' : clamped === bounds.max ? 'Price ceiling' : 'Price clamps',
-    value: clamped === bounds.min ? bounds.min : clamped === bounds.max ? bounds.max : 0,
+    label: clamped === bounds.min ? 'Price floor' : clamped === upperBound ? 'Price ceiling' : 'Price clamps',
+    value: clamped === bounds.min ? bounds.min : clamped === upperBound ? upperBound : 0,
     effect: price - previous,
-    detail: `Allowed range ${bounds.min.toFixed(config.pricing.rounding.decimals)}-${bounds.max.toFixed(config.pricing.rounding.decimals)}`,
+    detail: `Allowed range ${bounds.min.toFixed(config.pricing.rounding.decimals)}-${upperBound.toFixed(config.pricing.rounding.decimals)}`,
   })
 
   previous = price
   const rounded = roundTo(price, config.pricing.rounding.decimals, config.pricing.rounding.mode)
-  price = clamp(rounded, bounds.min, bounds.max)
+  price = clamp(rounded, bounds.min, upperBound)
   reasons.push({
     code: 'rounding',
     label: 'Rounding',
@@ -292,17 +321,25 @@ const computeSidePrice = (
   return { unitPrice: price, reasons }
 }
 
-const rivalReferencePrice = (
+/**
+ * Selects the deterministic rival sample used for a quote.
+ *
+ * Candidates are ordered by stable codepoint, then the ordered list is rotated
+ * by a hash of the market context. The rotation is stable for a given market
+ * bucket but changes over time, so no merchant is permanently favoured by an
+ * alphabetical prefix.
+ */
+export function selectRivalMerchants(
   merchant: MerchantState,
-  item: ItemConfig,
+  itemId: ItemId,
   side: TradeSide,
   market: MarketState,
   config: EconomyConfig,
-): number | null => {
+): MerchantState[] {
   const maxRivals = Math.max(0, Math.floor(config.pricing.rival.maxRivals))
-  if (maxRivals === 0) return null
+  if (maxRivals === 0) return []
 
-  const rivals = Object.values(market.merchants)
+  const ordered = Object.values(market.merchants)
     .filter(candidate => candidate.id !== merchant.id)
     .filter(candidate => canMerchantTrade(candidate, config))
     .filter(candidate => Boolean(config.personalities[candidate.personality]))
@@ -311,17 +348,52 @@ const rivalReferencePrice = (
       if (!candidateConfig) return false
       if (side === 'buy') {
         return (
-          candidateConfig.sells.includes(item.id) &&
-          stockFor(candidate, item.id) > 0
+          candidateConfig.sells.includes(itemId) &&
+          stockFor(candidate, itemId) > 0
         )
       }
       return (
-        candidateConfig.buys.includes(item.id) &&
+        candidateConfig.buys.includes(itemId) &&
         candidate.cash > candidate.reserve
       )
     })
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .slice(0, maxRivals)
+    .sort((left, right) => stableCompare(left.id, right.id))
+
+  if (ordered.length <= maxRivals) return ordered
+
+  const bucket = Math.floor(
+    Math.max(0, market.time) / config.pricing.rival.rotationSeconds,
+  )
+  const rotationKey = stableStringify([
+    market.seed,
+    merchant.id,
+    itemId,
+    side,
+    market.day,
+    bucket,
+  ])
+  const offset = stableHashIndex(rotationKey, ordered.length)
+
+  return [...ordered.slice(offset), ...ordered.slice(0, offset)].slice(
+    0,
+    maxRivals,
+  )
+}
+
+const rivalReferencePrice = (
+  merchant: MerchantState,
+  item: ItemConfig,
+  side: TradeSide,
+  market: MarketState,
+  config: EconomyConfig,
+): number | null => {
+  const rivals = selectRivalMerchants(
+    merchant,
+    item.id,
+    side,
+    market,
+    config,
+  )
 
   if (rivals.length === 0) return null
 
@@ -451,6 +523,7 @@ export function quote(
   const reasons = [...priced.reasons]
   let unitPrice = priced.unitPrice
   const bounds = priceBoundsFor(itemConfig, config)
+  const upperBound = Math.max(bounds.min, bounds.max)
 
   // Never return a crossed quote if the merchant both buys and sells the item.
   const oppositeSide: TradeSide = side === 'buy' ? 'sell' : 'buy'
@@ -479,7 +552,7 @@ export function quote(
           config.pricing.rounding.mode,
         ),
         bounds.min,
-        bounds.max,
+        upperBound,
       )
       reasons.push({
         code: 'spread-guard',
@@ -514,13 +587,10 @@ export function quote(
       : Math.max(0, Math.floor(maxStockForPurchases - stock))
   const maxByMerchantCash =
     side === 'sell'
-      ? Math.max(
-          0,
-          Math.floor(
-            unitPrice > 0
-              ? Math.max(0, merchant.cash - merchant.reserve) / unitPrice
-              : 0,
-          ),
+      ? maxAffordableQuantity(
+          Math.max(0, merchant.cash - merchant.reserve),
+          unitPrice,
+          config,
         )
       : null
 
@@ -534,8 +604,7 @@ export function quote(
   if (market.player) {
     playerCash = Math.max(0, market.player.cash)
     if (side === 'buy') {
-      maxByPlayerCash =
-        unitPrice > 0 ? Math.max(0, Math.floor(playerCash / unitPrice)) : 0
+      maxByPlayerCash = maxAffordableQuantity(playerCash, unitPrice, config)
     } else {
       playerInventory = Math.max(
         0,
@@ -581,11 +650,7 @@ export function quote(
   const partialFill = fillQuantity > 0 && fillQuantity < requested
   const total =
     fillQuantity > 0
-      ? roundMoney(
-          fillQuantity * unitPrice,
-          config.currency.decimals,
-          config.pricing.rounding.mode,
-        )
+      ? totalForQuantity(fillQuantity, unitPrice, config)
       : 0
 
   let blockedReason: string | undefined

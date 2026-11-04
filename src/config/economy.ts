@@ -607,6 +607,7 @@ export const economy = {
       weight: 0.25,
       maxAdjustment: 0.3,
       maxRivals: 3,
+      rotationSeconds: 3600,
     },
     spread: {
       base: 0.015,
@@ -680,7 +681,7 @@ export const economy = {
     days: 7,
     stepSeconds: 30,
     durationSeconds: 60,
-    maxDays: 31,
+    maxDays: 8,
     maxSteps: 25000,
     seedBehavior: 'derive-per-run',
   },

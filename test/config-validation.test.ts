@@ -86,6 +86,51 @@ test('config validation rejects unsafe fast-forward settings', () => {
   )
 })
 
+test('config validation checks maxDays against maxSteps, not just the demo days', () => {
+  const invalid = cloneEconomy()
+  invalid.fastForward.maxDays = 31
+  invalid.fastForward.maxSteps = 25000
+
+  assert.throws(
+    () => validateEconomyConfig(invalid),
+    error =>
+      hasIssue(
+        error,
+        /fastForward\.maxDays.*requires 89280 steps.*above maxSteps 25000/,
+      ),
+  )
+})
+
+test('config validation requires currency precision to cover price precision', () => {
+  const invalid = cloneEconomy()
+  invalid.currency.decimals = 1
+  invalid.pricing.rounding.decimals = 2
+
+  assert.throws(
+    () => validateEconomyConfig(invalid),
+    error =>
+      hasIssue(
+        error,
+        /currency\.decimals.*at least pricing\.rounding\.decimals/,
+      ),
+  )
+})
+
+test('config validation uses the effective bankruptcy threshold', () => {
+  const invalid = cloneEconomy()
+  invalid.pricing.cash.bankruptcyRatio = 2
+  invalid.merchants.ferro.cash = invalid.merchants.ferro.reserve * 1.5
+
+  assert.throws(
+    () => validateEconomyConfig(invalid),
+    error =>
+      hasIssue(
+        error,
+        /merchants\.ferro\.cash.*effective bankruptcy threshold 160/,
+      ),
+  )
+})
+
 test('config validation rejects items without a buyer', () => {
   const invalid = cloneEconomy()
   for (const merchant of Object.values(invalid.merchants)) {
