@@ -261,6 +261,7 @@ const botsSchema = z
         cadenceSeconds: positive,
         jitterSeconds: nonNegative,
         maxTradeQuantity: z.number().int().positive(),
+        maxTradeAttempts: z.number().int().positive(),
         buyProbability: ratio,
         sellProbability: ratio,
       })
@@ -269,6 +270,13 @@ const botsSchema = z
       .object({
         min: positive,
         max: positive,
+      })
+      .strict(),
+    startingInventory: z
+      .object({
+        chance: ratio,
+        quantityRange: yieldRangeSchema,
+        fallbackQuantityRange: yieldRangeSchema,
       })
       .strict(),
   })
@@ -320,6 +328,118 @@ const sinksSchema = z
   })
   .strict()
 
+const cashRecoverySchema = z
+  .object({
+    dailyRate: ratio,
+    targetReserveMultiple: positive,
+  })
+  .strict()
+
+const investmentsSchema = z
+  .object({
+    profitShareRate: ratio,
+    minDistribution: nonNegative,
+  })
+  .strict()
+
+const orderTemplateSchema = z
+  .object({
+    id,
+    issuer: id,
+    itemId: id,
+    quantityRange: yieldRangeSchema,
+  })
+  .strict()
+
+const orderBotParticipationSchema = z
+  .object({
+    enabled: z.boolean(),
+    chance: ratio,
+    maxUnitsPerDelivery: z.number().int().positive(),
+  })
+  .strict()
+
+const ordersSchema = z
+  .object({
+    maxActive: z.number().int().positive(),
+    cadenceDays: z.number().int().positive(),
+    expiryDays: z.number().int().positive(),
+    rewardMultiplier: yieldRangeSchema,
+    templates: z.array(orderTemplateSchema).min(1),
+    botParticipation: orderBotParticipationSchema,
+  })
+  .strict()
+
+const scenarioRescueSchema = z
+  .object({
+    investorId: id,
+    amount: positive,
+    delaySeconds: nonNegative,
+  })
+  .strict()
+
+const scenarioShockSchema = z
+  .object({
+    id,
+    day: z.number().int().positive(),
+    atSecond: z.number().int().min(0).max(86399),
+    merchantId: id,
+    kind: z.enum(['cash-drain', 'bulk-purchase']),
+    amount: positive.optional(),
+    itemId: id.optional(),
+    quantity: positive.optional(),
+    unitPrice: positive.optional(),
+    message: id,
+    rescue: scenarioRescueSchema.optional(),
+  })
+  .strict()
+  .superRefine((shock, context) => {
+    if (shock.kind === 'cash-drain' && shock.amount === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['amount'],
+        message: 'cash-drain shock requires an amount',
+      })
+    }
+    if (shock.kind === 'bulk-purchase') {
+      for (const field of ['itemId', 'quantity', 'unitPrice'] as const) {
+        if (shock[field] === undefined) {
+          context.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `bulk-purchase shock requires ${field}`,
+          })
+        }
+      }
+    }
+  })
+
+const scenarioInvestorSchema = z
+  .object({
+    id,
+    displayName: id,
+    cash: positive,
+  })
+  .strict()
+
+const scenarioSchema = z
+  .object({
+    id,
+    description: id,
+    investor: scenarioInvestorSchema.optional(),
+    shocks: z.array(scenarioShockSchema),
+  })
+  .strict()
+
+const reportingSchema = z
+  .object({
+    eventRetention: z.number().int().positive(),
+    summaryRetentionDays: z.number().int().positive(),
+    topMovers: z.number().int().positive(),
+    eventSampleSize: z.number().int().positive(),
+  })
+  .strict()
+
 const fastForwardSchema = z
   .object({
     days: z.number().int().positive(),
@@ -360,6 +480,11 @@ export const economyConfigSchema = z
     bots: botsSchema,
     caravan: caravanSchema,
     sinks: sinksSchema,
+    cashRecovery: cashRecoverySchema,
+    investments: investmentsSchema,
+    orders: ordersSchema,
+    scenario: scenarioSchema,
+    reporting: reportingSchema,
     fastForward: fastForwardSchema,
   })
   .strict()
@@ -539,6 +664,107 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
     }
   })
 
+  const orderTemplateIds = new Set<string>()
+  config.orders.templates.forEach((template, index) => {
+    const path = `orders.templates[${index}]`
+    itemRef(`${path}.itemId`, template.itemId)
+    if (orderTemplateIds.has(template.id)) {
+      add(`${path}.id`, `duplicate order template id "${template.id}"`)
+    }
+    orderTemplateIds.add(template.id)
+    if (template.quantityRange.min > template.quantityRange.max) {
+      add(`${path}.quantityRange`, 'quantity minimum must not exceed maximum')
+    }
+  })
+  if (config.orders.rewardMultiplier.min > config.orders.rewardMultiplier.max) {
+    add('orders.rewardMultiplier', 'reward multiplier minimum must not exceed maximum')
+  }
+  if (config.orders.maxActive > config.orders.templates.length) {
+    add(
+      'orders.maxActive',
+      'maxActive cannot exceed the number of order templates',
+    )
+  }
+
+  const scenarioShockIds = new Set<string>()
+  let rescueTotal = 0
+  config.scenario.shocks.forEach((shock, index) => {
+    const path = `scenario.shocks[${index}]`
+    if (scenarioShockIds.has(shock.id)) {
+      add(`${path}.id`, `duplicate scenario shock id "${shock.id}"`)
+    }
+    scenarioShockIds.add(shock.id)
+
+    const merchant = config.merchants[shock.merchantId]
+    if (!merchant) {
+      add(`${path}.merchantId`, `unknown merchant id "${shock.merchantId}"`)
+    }
+    if (shock.day > config.fastForward.maxDays) {
+      add(
+        `${path}.day`,
+        `shock day ${shock.day} is beyond fastForward.maxDays ${config.fastForward.maxDays}`,
+      )
+    }
+    if (shock.kind === 'bulk-purchase') {
+      if (shock.itemId !== undefined) {
+        itemRef(`${path}.itemId`, shock.itemId)
+        if (merchant && !merchant.buys.includes(shock.itemId)) {
+          add(
+            `${path}.itemId`,
+            `bulk-purchase item "${shock.itemId}" must be bought by ${shock.merchantId}`,
+          )
+        }
+      }
+      if (
+        merchant &&
+        shock.quantity !== undefined &&
+        shock.unitPrice !== undefined &&
+        shock.quantity * shock.unitPrice <= merchant.cash
+      ) {
+        add(
+          `${path}`,
+          `bulk purchase must cost more than ${shock.merchantId}'s starting cash to guarantee the demo cash crisis`,
+        )
+      }
+    } else if (merchant && shock.amount !== undefined && shock.amount <= merchant.cash) {
+      add(
+        `${path}.amount`,
+        `cash-drain must exceed ${shock.merchantId}'s starting cash to guarantee the demo cash crisis`,
+      )
+    }
+
+    if (shock.rescue) {
+      const investor = config.scenario.investor
+      if (!investor) {
+        add(`${path}.rescue`, 'rescue requires scenario.investor')
+      } else if (shock.rescue.investorId !== investor.id) {
+        add(
+          `${path}.rescue.investorId`,
+          `rescue investor "${shock.rescue.investorId}" does not match scenario.investor "${investor.id}"`,
+        )
+      }
+      rescueTotal += shock.rescue.amount
+    }
+  })
+
+  if (config.scenario.investor) {
+    if (rescueTotal > config.scenario.investor.cash + 1e-9) {
+      add(
+        'scenario.investor.cash',
+        `investor cash ${config.scenario.investor.cash} cannot fund scheduled rescues totalling ${rescueTotal}`,
+      )
+    }
+  } else if (config.scenario.shocks.some(shock => shock.rescue)) {
+    add('scenario.investor', 'scheduled rescues require a scenario investor')
+  }
+
+  if (config.cashRecovery.targetReserveMultiple <= 1) {
+    add(
+      'cashRecovery.targetReserveMultiple',
+      'recovery target must be above the reserve',
+    )
+  }
+
   for (const [itemId, item] of Object.entries(config.items)) {
     const path = `items.${itemId}`
     const hasSource =
@@ -595,6 +821,21 @@ export function collectEconomyConfigIssues(config: EconomyConfig): ConfigValidat
 
   if (config.bots.startingCash.min > config.bots.startingCash.max) {
     add('bots.startingCash', 'bot starting cash minimum must not exceed maximum')
+  }
+  if (
+    config.bots.behavior.buyProbability + config.bots.behavior.sellProbability >
+    1
+  ) {
+    add(
+      'bots.behavior',
+      'buy and sell probabilities must not add up to more than 1',
+    )
+  }
+  for (const key of ['quantityRange', 'fallbackQuantityRange'] as const) {
+    const range = config.bots.startingInventory[key]
+    if (range.min > range.max) {
+      add(`bots.startingInventory.${key}`, 'minimum must not exceed maximum')
+    }
   }
 
   const pricing = config.pricing

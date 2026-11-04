@@ -11,7 +11,9 @@
     "test:unit": "tsx --test test/*.test.ts",
     "test:auth": "vitest run --config vitest.config.ts",
     "test:production": "RPG_TYPE=rpg node --test test/production-preview.test.mjs",
-    "test:production:auth": "node --test test/production-auth.test.mjs"
+    "test:production:auth": "node --test test/production-auth.test.mjs",
+    "sim": "tsx scripts/sim.ts",
+    "economy:reset": "tsx scripts/economy-reset.ts"
   },
   "keywords": [
     "near",

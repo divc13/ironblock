@@ -62,6 +62,22 @@ The port is deliberate: the shared NEAR Auth testnet Auth0 application allows
 exactly. Use the manual checklist in
 [`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md).
 
+The default economy config runs the deterministic `demoScenario` story. To run the
+stable sandbox economy instead, use the exported switch:
+
+```ts
+import { economy, stableSandboxScenario } from './src/config/economy'
+import type { EconomyConfig } from './src/shared/types'
+
+const config: EconomyConfig = {
+  ...economy,
+  scenario: stableSandboxScenario,
+}
+```
+
+`npm run sim` uses the default demo scenario and prints bankruptcies, rescue
+investments, order deliveries, caravan impact and top movers.
+
 ## Build, preview and production start
 
 ```bash
@@ -98,11 +114,11 @@ The client derives its login path from Vite's `BASE_URL`, so it posts to
 ## Tests
 
 ```bash
-npm run config:check        # validate the economy config
 npm run test:unit           # economy foundation tests (pricing, validation, bootstrap)
 npm run test:auth           # JWT, MPC identity, sessions, logout, socket, rate limits
 npm run test:production     # standalone asset smoke test (RPG_TYPE=rpg)
 npm run test:production:auth # built preview + production auth probe
+npm run config:check && npm run sim -- --days 7  # deterministic demo economy checkpoint
 npm test                    # all of the above
 ```
 
