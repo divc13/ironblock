@@ -37,8 +37,8 @@ Day-1 example from the real engine (fresh world, seed
 | Stall | Item | Ask (player buys) | Bid (player sells) | Base |
 | --- | --- | ---: | ---: | ---: |
 | Wheatley | Grain | IB3.55 | IB2.75 | IB3.00 |
-| Wheatley | Bread | IB11.81 | IB9.19 | IB10.00 |
-| Ferro | Iron Ore | IB7.26 | IB5.47 | IB6.00 |
+| Wheatley | Bread | IB11.78 | IB9.11 | IB10.00 |
+| Ferro | Iron Ore | IB7.19 | IB5.54 | IB6.00 |
 
 ## The quote pipeline (9 steps)
 
@@ -129,9 +129,9 @@ badly" behaviour.
   and `factor = clamp(1 + 0.25 × rivalSensitivity × gap, 0.7, 1.3)`. This is a
   soft pull toward competitors, not a hard undercut.
 
-Verified day-1 example: Weaver asks IB16.28 for cloth while Broker asks IB18.29,
-so Weaver's rival step adds +IB0.55. Broker asks IB17.91 while Weaver asks
-IB15.73, so Broker's rival step subtracts −IB0.37.
+Verified day-1 example: Weaver asks IB16.26 for cloth while Broker asks IB18.10,
+so Weaver's rival step adds +IB0.53. Broker asks IB18.10 while Weaver asks
+IB16.26 (Sable Voss also competes), so Broker's rival step subtracts −IB0.19.
 
 ### Merchant margins and the personalities
 
@@ -242,8 +242,8 @@ arrivals per simulated day). On each arrival:
 - Caravan trades bypass the sales tax and do not pay rent.
 
 The event records units sold into town, units bought out of town, and the cash
-each way. In the seven-day tuned run: 336 arrivals, 4,294 units sold into town
-for IB11,465.28, and 6,430 units bought out of town for IB17,184.44.
+each way. In the seven-day tuned run: 336 arrivals, 4,459 units sold into town
+for IB11,522.51, and 7,012 units bought out of town for IB18,457.24.
 
 ## Rent, tax and other sinks
 
@@ -256,8 +256,8 @@ for IB11,465.28, and 6,430 units bought out of town for IB17,184.44.
 
 Rent is charged before the profit-share calculation, so investment
 distributions are paid out of rent-paid profit. In the seven-day run the sinks
-were rent IB660.00, sales tax IB1,186.93, repairs IB0.00 and scenario shocks
-IB816.64.
+were rent IB900.00, sales tax IB1,211.25, repairs IB0.00 and scenario shocks
+IB676.30.
 
 ## Order pricing
 
@@ -285,8 +285,8 @@ an order a player has accepted.
 | `smelter_iron_ore` | Smelter Guild | Iron Ore | 10–20 |
 | `weavers_wool` | Weavers Guild | Wool | 8–14 |
 
-In the tuned seven-day run the board created 44 orders and bots delivered 398
-units for IB5,001.18.
+In the tuned seven-day run the board created 47 orders and bots delivered 415
+units for IB5,037.59.
 
 ## The 13 items (base prices)
 
@@ -319,6 +319,8 @@ supplies recorded in `contracts/nep245/deployments/testnet.json`.
 | 4 | Weaver | 4 | balanced | 420 | 60 | wool | wool, cloth | 0.09 / 0.14 | 120 / 6 / 0.95 | 3 wool → 1 cloth, ×2 |
 | 5 | Toolsmith | 5 | premium | 760 | 110 | iron_ingot, plank, pickaxe, hoe, axe | pickaxe, hoe, axe | 0.14 / 0.22 | 180 / 2 / 0.90 | 5 ingot + 3 plank → 1 pickaxe + 1 hoe + 1 axe, ×1 |
 | 6 | Broker | 6 | hoarder | 980 | 150 | iron_ingot, plank, cloth, pickaxe, hoe, axe, bread, cloak | grain, flour, bread, cloth, cloak | 0.12 / 0.18 | 240 / 5 / 0.90 | none |
+| 7 | Sable Voss | 7 | premium | 640 | 90 | bread, cloth, cloak | bread, cloth, cloak | 0.12 / 0.19 | 180 / 4 / 0.92 | none |
+| 8 | Rook Kestrel | 8 | aggressive | 560 | 85 | iron_ore, iron_ingot, timber, plank | iron_ore, iron_ingot, timber, plank | 0.08 / 0.14 | 100 / 7 / 0.95 | none |
 
 Personalities are assignments, not overrides: a merchant's own `margins` are
 still the base, then the personality multiplier scales them.
@@ -326,7 +328,7 @@ still the base, then the personality multiplier scales them.
 ## Worked example (verified against the engine)
 
 Fresh world at day 1 (seed `ironblock-testnet-2026`), buy **1 Bread from
-Wheatley**. The engine returns `unitPrice = IB11.81` with this trail:
+Wheatley**. The engine returns `unitPrice = IB11.78` with this trail:
 
 | Step | Input | Effect | Running price |
 | --- | --- | ---: | ---: |
@@ -336,19 +338,19 @@ Wheatley**. The engine returns `unitPrice = IB11.81` with this trail:
 | Cash | Cash 380 vs reserve 60 → pressure 0 | 0.0000 | 10.0000 |
 | Margin | Sell margin 11.00% (balanced ×1) | +1.1000 | 11.1000 |
 | Spread | 1.50% half-spread | +0.1665 | 11.2665 |
-| Rival | Broker's bread ask reference IB13.93 → gap 0.1912 × 0.25 | +0.5386 | 11.8051 |
-| Clamp | Allowed 3.50–28.00 | 0.0000 | 11.8051 |
-| Rounding | nearest, 2 decimals | +0.0049 | **11.81** |
+| Rival | Broker/Sable bread ask reference IB13.79 → gap 0.1827 × 0.25 | +0.5146 | 11.7811 |
+| Clamp | Allowed 3.50–28.00 | 0.0000 | 11.7811 |
+| Rounding | nearest, 2 decimals | −0.0011 | **11.78** |
 
 The same fresh world, selling **1 Bread to Wheatley** (the player starts with
-two), returns **IB9.19**:
+two), returns **IB9.11**:
 
 ```text
 10.00                         base
 × (1 − 0.07) = 9.30           buy margin (7%, balanced)
 × (1 − 0.015) = 9.1605        half-spread
-× (1 + 0.25 × 0.01394)        rival pull toward the IB9.29 rival bid
-= 9.1924 → IB9.19             rounding
+× (1 + 0.25 × −0.0241)        rival pull toward the IB8.95 rival bid
+= 9.1053 → IB9.11             rounding
 ```
 
 Two more verified quotes show the personality and rival effects:
@@ -357,9 +359,9 @@ Two more verified quotes show the personality and rival effects:
   price by +IB3.52; the premium preset turns the 22% margin into 33%
   (+IB17.00); the 1.6× spread adds +IB1.64; no rival sells pickaxes. Base IB48
   → IB70.17.
-- **1 Cloth from Weaver** = **IB16.28** vs **IB17.91 from Broker**. Weaver's
-  small low-stock lift and 14% margin put it at IB16.28 and Broker's ask pulls
-  it up; Broker's 24.3% effective margin puts it at IB17.91 and Weaver's lower
+- **1 Cloth from Weaver** = **IB16.26** vs **IB18.10 from Broker**. Weaver's
+  small low-stock lift and 14% margin put it at IB16.26 and Broker's ask pulls
+  it up; Broker's 24.3% effective margin puts it at IB18.10 and Weaver's lower
   ask pulls it down. Same item, same day, different stall economics.
 
 ## Where to tune this (config only)
@@ -404,18 +406,19 @@ manually, run `npm run economy:reset` (`data/economy-world.json` by default).
 
 ## Verification checkpoint
 
-`npm run sim` on commit `dfa7529` (config unchanged) prints:
+`npm run sim -- --days 7` on the current config prints:
 
 ```text
-Simulated 20,160 steps, 15,646 events
-Bankruptcies: 2   Investments: 1 (IB120.00)   Investment profit paid: IB49.89
-Orders: 44 created, 398 deliveries, 398 units delivered for IB5,001.18
-Caravan: 4,294 units sold into town (IB11,465.28), 6,430 units bought (IB17,184.44)
-Sinks: rent IB660.00, tax IB1,186.93, repairs IB0.00, shocks IB816.64
-End state: 5 of 6 stalls open; Weaver is closed for the player to reopen
+Simulated 20,160 steps in about 3 s (15,443 events emitted)
+Bankruptcies: 2   Investments: 1 (IB120.00)   Investment profit paid: IB40.85
+Orders: 47 created, 415 deliveries, 415 units delivered for IB5,037.59
+Caravan: 4,459 units sold into town (IB11,522.51), 7,012 units bought (IB18,457.24)
+Sinks: rent IB900.00, tax IB1,211.25, repairs IB0.00, shocks IB676.30
+End state: 7 of 8 stalls open; Weaver is closed for the player to reopen
 ```
 
 The two bankruptcies are the two scripted shocks: Timberly's bulk timber
 purchase on day 2 (rescued by the Guild Factor after six hours with IB120) and
-Weaver's loom repair bill on day 5 (left closed for the player). The full
-cause/effect feed is printed by the same command.
+Weaver's loom repair bill on day 5 (left closed for the player). Sable Voss and
+Rook Kestrel both survive the week. The full cause/effect feed is printed by
+the same command.

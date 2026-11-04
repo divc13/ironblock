@@ -41,7 +41,11 @@ test('buying moves cash, stock and inventory through the shared quote', async ()
 
   const after = await mock.getSnapshot()
   const ferro = await mock.getMerchant('ferro')
-  assert.equal(after.player.cash, before.player.cash - result.total)
+  assert.equal(
+    after.player.cash,
+    Math.round((before.player.cash - result.total) * 100) / 100,
+    'cash is debited at the configured currency precision',
+  )
   assert.equal(
     after.player.inventory.find(line => line.itemId === 'iron_ingot')?.quantity,
     1,

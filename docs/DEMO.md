@@ -20,7 +20,7 @@ settlement proof. It is **testnet only**; no real money is used or custodied.
 | 0:00–1:00 | Setup and login | One Auth0 popup, no wallet or seed phrase |
 | 1:00–2:30 | Scene 1 — market town | Gather, smelt, sell, buy bread; HUD cash and bag change |
 | 2:30–3:15 | Scene 2 — price reasons | Tooltip causal trail; stock and demand move a quote |
-| 3:15–5:00 | Scene 3 — seven days | 2 bankruptcies, 1 rescue investment, reopen, 398 order units |
+| 3:15–5:00 | Scene 3 — seven days | 2 bankruptcies, 1 rescue investment, reopen, 415 order units |
 | 5:00–7:00 | Scene 4 — spectator and proof | Live snapshot, events, recap, one real testnet transfer |
 | 7:00–8:00 | Scene 5 — close | Thesis, what is real, honest limitations |
 
@@ -76,7 +76,9 @@ prices or balances as live.
 
 **What to point at first**
 
-- The market square has six merchant stalls and four resource areas.
+- The market square has eight merchant stalls and four resource areas. The two
+  newest stalls, Sable Voss (fixer) and Rook Kestrel (smuggler), sit on the
+  bottom row.
 - The HUD shows **Cash**, **Carry**, **Stamina**, **Day** and **Town**, plus
   **Bag (I)**, **Orders (O)**, **Week (F)** and **Recap (R)**.
 - The **Market Wire** feed on the right records every trade and price move.
@@ -164,7 +166,7 @@ rivals, clamps and rounding. The tooltip is the arithmetic, in order.”
 2. The panel is titled **“Fast-Forward the Week”** and notes
    **“Seven days in about 60s · 30s ticks”**.
 3. Click **Run 7 days**. On the authoritative server the week is computed in
-   about **2 seconds**; the playback and narration budget is **under one
+   about **3 seconds**; the playback and narration budget is **under one
    minute**.
 4. When it completes, open **Recap (R)** to show the town newspaper summary.
 
@@ -178,22 +180,22 @@ npm run sim -- --days 7
 
 | Metric | Verified value |
 | --- | --- |
-| Simulation | 20,160 steps in **1,993 ms** (about 2 s) |
+| Simulation | 20,160 steps (about **3 s** on this machine) |
 | Bankruptcies | **2** |
 | Rescue investments | **1**, **IB120.00** by the Guild Factor |
-| Orders delivered | **398 units** (44 orders created, IB5,001.18 paid) |
-| End state | **5 of 6 stalls open**; Weaver is closed for the player |
+| Orders delivered | **415 units** (47 orders created, IB5,037.59 paid) |
+| End state | **7 of 8 stalls open**; Weaver is closed for the player |
 
 **Narrate the story**
 
-- **Day 2 — Timberly.** A speculative hardwood load: Timberly buys 38 Timber at
-  IB8.50 each (IB323.00), leaving IB4.26 against a IB70.00 reserve. The stall
+- **Day 2 — Timberly.** A speculative hardwood load: Timberly buys 53 Timber at
+  IB8.50 each (IB450.50), leaving IB3.86 against a IB70.00 reserve. The stall
   goes bankrupt and closes. Six hours later the **Guild Factor invests
   IB120.00**, and Timberly **reopens**.
-- **Day 5 — Weaver.** The loom repair bill consumes IB493.64, leaving IB0.00
+- **Day 5 — Weaver.** The loom repair bill consumes IB225.80, leaving IB0.00
   against a IB60.00 reserve. Weaver goes bankrupt and stays closed.
-- **End of week.** Five of six stalls are open. Open Weaver’s merchant panel to
-  show **“Reopen stall — IB120.00”** (the button shows the current required
+- **End of week.** Seven of eight stalls are open. Open Weaver’s merchant panel
+  to show **“Reopen stall — IB120.00”** (the button shows the current required
   amount). If you click it, that is a **second, player-funded investment**;
   don’t count it in the recorded “1 investment” checkpoint.
 
@@ -300,7 +302,7 @@ observable, and honest about what is simulated.”
 | `NEAR_AUTH_SESSION_SECRET` is missing. | Development can use an ephemeral secret; production cannot. | Set a random 32+ character value in `.env`. In dev, sessions reset on restart until you do. |
 | The Auth0 popup does not open. | Browser popup blocker. | Allow popups for `localhost:3000`, then click one login button again. |
 | `/spectator` is 404 or shows **DEMO REPLAY**. | The observability integration is not mounted, or the live API is down. | Use the integrated Phase 2 build and check `/api/market/snapshot`; for the judge path, use the **LIVE** dashboard. |
-| Fast-forward numbers differ from this page. | The live world already includes your trades; the checkpoint is a fresh world. | Use the events shown, and quote `npm run sim -- --days 7` for the canonical 2/1/398/≈2 s numbers. |
+| Fast-forward numbers differ from this page. | The live world already includes your trades; the checkpoint is a fresh world. | Use the events shown, and quote `npm run sim -- --days 7` for the canonical 2/1/415/≈3 s numbers. |
 
 All numbers in this walkthrough come from `src/config/economy.ts`,
 `contracts/nep245/deployments/testnet.json`, `npm run sim -- --days 7`, or a

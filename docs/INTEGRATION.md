@@ -132,8 +132,8 @@ before the docs merge). It adds:
   [`DEMO.md`](DEMO.md), [`PRICING.md`](PRICING.md) and
   [`HOSTING.md`](HOSTING.md).
 
-Final integrated checks: `npm test` 235/235, `npm run config:check`, seven-day
-simulation (2 bankruptcies, 1 investment, 398 order units), production build,
+Final integrated checks: `npm test` 250/250, `npm run config:check`, seven-day
+simulation (2 bankruptcies, 1 investment, 415 order units), production build,
 and production probes for auth, economy, spectator and settlement health.
 
 Still honest limitations:
