@@ -153,18 +153,26 @@ JSON unless noted. Public data only (see privacy below).
   reports `live.unchanged`, `sequenceBefore`, `sequenceAfter`, `day`, and
   `time` so callers can verify this.
 - Response: `{ ok, mode: 'deterministic-clone', days, startDay, endDay,
-  fromTime, toTime, seed, finalSequence, series, summaries, events,
-  annotations, recap, finalMerchants, timing: { cloneMs, simulateMs, totalMs,
-  steps, days, eventCount }, live }`. `finalMerchants` is the sanitized
+  fromTime, toTime, seed, finalSequence, series, summaries, priceHistory,
+  events, annotations, recap, finalMerchants, timing: { cloneMs, simulateMs,
+  totalMs, steps, days, eventCount }, live }`. `finalMerchants` is the sanitized
   week-end stall state used by the dashboard's final price and stock heatmaps.
+- `priceHistory` is captured once at each simulated day close. Each entry is
+  `{ day, endedAt, prices: { "merchantId:itemId": { bid, ask } } }`; asks and
+  bids are sanitized market quotes only. It is computed in the throwaway clone
+  and is not added to live SSE snapshots. The dashboard uses every good at
+  every close for its **Price paths** card, indexed to the first close.
 - `annotations` are built server-side from real engine events (caravan
-  arrivals, bankruptcies, reopens, distributions, recoveries, rent aggregates,
-  day close) with causal-chain strings; the dashboard uses them for the ~60 s
-  annotated playback (`playback.ts`), it does not invent events.
+  arrivals, shocks, bankruptcies, reopens, distributions, recoveries, rent
+  aggregates, day close) with causal-chain strings; the dashboard uses them for
+  the ~7 s annotated playback (`playback.ts`) and the price-path markers. It
+  does not invent events. Scalar scenario shocks that are omitted by the event
+  sample are recovered from config inside the clone window, so a shock is
+  annotated exactly once.
 - Deterministic: identical live state + identical `days` yield identical
-  series/events/annotations (verified by tests).
+  series/priceHistory/events/annotations (verified by tests).
 - Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 3 s** server
-  compute; the client playback spreads the simulated week over about 60 s. The
+  compute; the client playback spreads the simulated week over about 7 s. The
   event count depends on the live state the clone starts from.
 - Limits: body > 4096 bytes → `413 body_too_large`; malformed JSON /
   non-object → `400 invalid_json`; invalid `days` → `400 invalid_days`.
@@ -201,14 +209,21 @@ public by design. `POST /fast-forward` responses apply the same sanitizer.
   charts.
 - Sections: top bar (status, day, clock, connection + demo badge), market tape,
   merchant cards, economy health, event stream with filters and keyboard-usable
-  detail view, chart panels (cash, prices, volume, town cash split, external
-  flows, price/stock market map), fast-forward panel with annotated ~60 s
-  playback (pause/step/skip), newspaper recap, on-chain proof panel. The
-  preview is explicitly labelled **Preview only · not saved**; the week runs on
-  a throwaway clone, never advances the live town, and is never persisted.
+  detail view, chart panels (cash, prices, all-good price paths, volume, town
+  cash split, external flows, price/stock market map, liquidity × stock risk,
+  per-stall cash attribution), fast-forward panel with annotated ~7 s playback
+  (pause/step/skip), newspaper recap, on-chain proof panel. The preview is
+  explicitly labelled **Preview only · not saved**; the week runs on a
+  throwaway clone, never advances the live town, and is never persisted.
+- Cross-chart interaction: one canonical day cursor (`Open`, `Dn`, `Now`)
+  follows the pointer or arrow keys across the price, price-path, cash, flow
+  and volume charts. The cursor is a DOM overlay, so live SVG re-renders do not
+  destroy it. Every chart has an exact-value table twin (`Show table`) built
+  from the same view model as the chart.
 - Accessibility: focus-visible outlines, keyboard shortcuts, ARIA live/status
   regions, contrast-checked palette, `prefers-reduced-motion` handling (charts
-  and playback respect it). Layouts verified at 1280×720 and 1920×1080.
+  and playback respect it). Layouts verified at 1280×960, 1280×720 and
+  390×844, with no horizontal overflow or console errors.
 - Demo fallback: if the live API is unavailable, the page labels itself
   **Replay / demo** and runs the same `runFastForwardClone` + sanitizers
   against a local engine in the browser. Demo data is never presented as live.

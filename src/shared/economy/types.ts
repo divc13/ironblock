@@ -335,6 +335,14 @@ export interface FastForwardSeriesPoint {
   sinkTotal: number
 }
 
+/** Month-free market snapshot captured at one simulated day close. */
+export interface FastForwardPriceSnapshot {
+  day: number
+  endedAt: number
+  /** Keyed by `merchantId:itemId`; only prices, no player or private state. */
+  prices: Record<string, { bid: number | null; ask: number | null }>
+}
+
 export interface EconomyFastForwardResult {
   success: boolean
   days: number
@@ -346,6 +354,7 @@ export interface EconomyFastForwardResult {
   seed: string
   summaries: DaySummary[]
   series: FastForwardSeriesPoint[]
+  priceHistory: FastForwardPriceSnapshot[]
   events: SequencedMarketEvent[]
   eventCount: number
   finalSequence: number

@@ -114,6 +114,11 @@ describe('observability HTTP middleware', () => {
       live: { unchanged: boolean; sequenceBefore: number; sequenceAfter: number }
       timing: { days: number; steps: number }
       series: unknown[]
+      priceHistory: Array<{
+        day: number
+        endedAt: number
+        prices: Record<string, { bid: number | null; ask: number | null }>
+      }>
       finalMerchants: Array<{ id: string; cash: number; reserve: number }>
     }
     assert.equal(payload.ok, true)
@@ -122,6 +127,10 @@ describe('observability HTTP middleware', () => {
     assert.equal(payload.live.unchanged, true)
     assert.equal(payload.live.sequenceAfter, liveBefore, 'live world untouched')
     assert.equal(payload.series.length, 1)
+    assert.equal(payload.priceHistory.length, 1)
+    assert.ok(payload.priceHistory[0].day >= 1)
+    assert.ok(Object.keys(payload.priceHistory[0].prices).length > 0)
+    assert.equal(payload.priceHistory[0].endedAt, payload.series[0].endedAt)
     assert.equal(payload.finalMerchants.length > 0, true)
     assert.equal(typeof payload.finalMerchants[0].cash, 'number')
     assert.equal(typeof payload.finalMerchants[0].reserve, 'number')

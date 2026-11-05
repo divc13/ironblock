@@ -15,7 +15,7 @@ import {
   type ObservabilityContextOptions,
 } from '../src/server/observability/context'
 import type { ObservabilityResult } from '../src/server/observability/types'
-import { runFastForwardClone } from '../src/server/observability/fastforward'
+import { buildAnnotations, runFastForwardClone } from '../src/server/observability/fastforward'
 import { buildRecap } from '../src/server/observability/recap'
 import { buildProofPayload, resolveDeployment } from '../src/server/observability/proof'
 import { sanitizeSpectatorSnapshot, buildPlayerAliases } from '../src/server/observability/sanitize'
@@ -279,6 +279,57 @@ test('fast-forward clone annotations tell the causal story', () => {
   assert.ok(kinds.has('day-close'), 'day summaries must be annotated')
   // Caravans arrive every 1800s, so several caravan beats must exist.
   assert.ok(kinds.has('caravan'), 'caravan beats must be annotated')
+})
+
+test('fast-forward captures sanitized item prices at every simulated close', () => {
+  const source = makeSource()
+  const first = runFastForwardClone(asObservabilitySource(source as never), {})
+  const second = runFastForwardClone(asObservabilitySource(source as never), {})
+  assert.equal(first.ok, true)
+  assert.equal(second.ok, true)
+  if (!first.ok || !second.ok) return
+  assert.equal(first.priceHistory.length, first.days)
+  assert.deepEqual(second.priceHistory, first.priceHistory)
+  assert.equal(first.priceHistory[0]?.day, first.startDay)
+  assert.equal(first.priceHistory.at(-1)?.day, first.startDay + first.days - 1)
+  for (let index = 0; index < first.priceHistory.length; index += 1) {
+    const point = first.priceHistory[index]
+    assert.equal(point.day, first.startDay + index)
+    assert.ok(point.endedAt > 0)
+    const quotes = Object.entries(point.prices)
+    assert.ok(quotes.length > 0)
+    for (const [key, quote] of quotes) {
+      assert.match(key, /^[a-z0-9_-]+:[a-z0-9_-]+$/)
+      assert.ok(
+        (quote.ask !== null && Number.isFinite(quote.ask) && quote.ask > 0) ||
+          (quote.bid !== null && Number.isFinite(quote.bid) && quote.bid > 0),
+        `${key} has neither a finite ask nor bid`,
+      )
+    }
+  }
+  const raw = JSON.stringify(first.priceHistory)
+  assert.equal(raw.includes('player-secret'), false)
+  assert.equal(raw.includes('secret-email@example.com'), false)
+})
+
+test('fast-forward annotations include scenario shocks exactly once', () => {
+  const source = makeSource()
+  const result = runFastForwardClone(asObservabilitySource(source as never), {})
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  const shocks = result.annotations.filter(annotation => annotation.kind === 'shock')
+  assert.equal(shocks.length, cloneConfig().scenario.shocks.length)
+  for (const shock of shocks) {
+    assert.ok(shock.title.length > 0)
+    assert.ok(shock.chain.length > 0)
+    assert.ok(Number.isFinite(shock.time))
+  }
+
+  // Event sampling can miss a shock; the config fallback must still annotate it.
+  const fallback = buildAnnotations([], [], cloneConfig(), 0, 8 * 86_400)
+  const fallbackShocks = fallback.filter(annotation => annotation.kind === 'shock')
+  assert.equal(fallbackShocks.length, cloneConfig().scenario.shocks.length)
+  assert.ok(fallbackShocks.every(annotation => annotation.eventId === null && annotation.sequence === 0))
 })
 
 test('fast-forward validates days and rejects bad input', () => {

@@ -275,6 +275,7 @@ export interface FastForwardAnnotation {
     | 'recovery'
     | 'distribution'
     | 'order-expired'
+    | 'shock'
     | 'summary'
   sequence: number
   time: number
@@ -291,6 +292,13 @@ export interface FastForwardTiming {
   steps: number
   days: number
   eventCount: number
+}
+
+/** One sanitized market snapshot captured at a simulated day close. */
+export interface FastForwardPriceSnapshot {
+  day: number
+  endedAt: number
+  prices: Record<string, { bid: number | null; ask: number | null }>
 }
 
 export interface FastForwardClonePayload {
@@ -315,6 +323,8 @@ export interface FastForwardClonePayload {
     sinkTotal: number
   }[]
   summaries: PublicSummary[]
+  /** Sanitized asks and bids for every merchant-item at each simulated close. */
+  priceHistory: FastForwardPriceSnapshot[]
   /** Final sanitized merchant state at the preview's last day close. */
   finalMerchants: PublicMerchant[]
   events: SequencedMarketEvent[]

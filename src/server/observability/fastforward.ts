@@ -110,7 +110,7 @@ export function runFastForwardClone(
 
   const aliases = buildPlayerAliases(liveBefore.players)
   const events = publicizeEvents(result.events, aliases, config)
-  const annotations = buildAnnotations(events, result.summaries, config)
+  const annotations = buildAnnotations(events, result.summaries, config, result.fromTime, result.toTime)
   const finalPublicSnapshot = sanitizeSpectatorSnapshot(clone.spectatorSnapshot(), config)
 
   return {
@@ -125,6 +125,16 @@ export function runFastForwardClone(
     finalSequence: result.finalSequence,
     series: result.series.map(point => ({ ...point })),
     summaries: result.summaries.map(sanitizeSummary),
+    priceHistory: result.priceHistory.map(point => ({
+      day: point.day,
+      endedAt: point.endedAt,
+      prices: Object.fromEntries(
+        Object.entries(point.prices).map(([key, quote]) => [
+          key,
+          { bid: quote.bid, ask: quote.ask },
+        ]),
+      ),
+    })),
     finalMerchants: finalPublicSnapshot.merchants,
     events,
     annotations,
@@ -161,6 +171,8 @@ export function buildAnnotations(
   events: SequencedMarketEvent[],
   summaries: DaySummary[],
   config: EconomyConfig,
+  fromTime: number,
+  toTime: number,
 ): FastForwardAnnotation[] {
   const annotations: FastForwardAnnotation[] = []
   const rentByDay = new Map<number, { total: number; count: number; sequence: number; time: number }>()
@@ -187,6 +199,21 @@ export function buildAnnotations(
           chain:
             `Caravan sells ${sold} units into town for ${formatMoney(config, cashIn)} -> merchant cash falls -> ` +
             `stock floods -> asks drift down. Caravan bought ${bought} units back, easing prices up.`,
+          eventId: event.id,
+        })
+        break
+      }
+      case 'system.shock': {
+        const shockId = event.reasons.find(reason => reason.code === 'shock')?.detail ?? null
+        const shock = config.scenario.shocks.find(candidate => candidate.id === shockId)
+        const merchant = shock ? config.merchants[shock.merchantId] : undefined
+        const label = shock?.kind === 'cash-drain' ? 'cash shock' : 'supply shock'
+        annotations.push({
+          ...base,
+          kind: 'shock',
+          title: `${merchant?.displayName ?? 'A stall'} ${label}`,
+          chain:
+            `${event.message} ${event.reasons.find(reason => reason.code === 'shock')?.detail ?? ''}`.trim(),
           eventId: event.id,
         })
         break
@@ -262,6 +289,28 @@ export function buildAnnotations(
       default:
         break
     }
+  }
+
+  const observedShocks = new Set(
+    events
+      .filter(event => event.type === 'system.shock')
+      .map(event => event.reasons.find(reason => reason.code === 'shock')?.detail)
+      .filter((value): value is string => Boolean(value)),
+  )
+  for (const shock of config.scenario.shocks) {
+    const time = (shock.day - 1) * 86400 + shock.atSecond
+    if (time < fromTime || time > toTime || observedShocks.has(shock.id)) continue
+    const merchant = config.merchants[shock.merchantId]
+    const label = shock.kind === 'cash-drain' ? 'cash shock' : 'supply shock'
+    annotations.push({
+      kind: 'shock',
+      sequence: 0,
+      time,
+      day: shock.day,
+      title: `${merchant?.displayName ?? 'A stall'} ${label}`,
+      chain: `${shock.message} -> cash and stock move without a player decision.`,
+      eventId: null,
+    })
   }
 
   for (const [day, entry] of rentByDay) {

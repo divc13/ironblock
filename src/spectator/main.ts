@@ -16,21 +16,35 @@ import type { EconomyConfig, ItemId, MarketEventType, MerchantId } from '../shar
 import { createFeed, type MarketFeed, type MarketStreamMessage } from './api'
 import { FastForwardPlayback, type PlaybackItem, type PlaybackProgress } from './playback'
 import {
+  renderCashChangeChart as renderCashChangeSvg,
   renderFlowChart as renderFlowSvg,
   renderHeatmap,
   renderMoneyFlowChart as renderMoneyFlowSvg,
   renderPriceChart as renderPriceSvg,
+  renderRiskScatter as renderRiskSvg,
   renderSparkline,
   renderVolumeChart as renderVolumeSvg,
+  type CashChangePoint,
   type FlowPoint,
   type HeatmapCell,
   type HeatmapColumn,
   type HeatmapRow,
   type HeatmapTone,
   type MoneyFlowPoint,
+  type PriceMarker,
   type PriceSeries,
   type Point,
+  type RiskPoint,
 } from './charts'
+import {
+  destroyCrosshair,
+  initCrosshair,
+  refreshCrosshair,
+  registerChart,
+  resetCrosshair,
+  setFromIndex,
+  updateChart,
+} from './crosshair'
 
 /* ------------------------------------------------------------------ state */
 
@@ -120,6 +134,31 @@ interface FlowView {
   emptyText: string
 }
 
+interface PriceHistoryView {
+  mode: 'live' | 'week'
+  labels: string[]
+  items: PriceItemView[]
+  markers: PriceMarker[]
+  key: string
+  ariaLabel: string
+  emptyText: string
+  sourceNote: string
+}
+
+interface StallRowView extends RiskPoint {
+  start: number
+  end: number
+}
+
+interface StallView {
+  mode: 'live' | 'week'
+  rows: StallRowView[]
+  key: string
+  ariaLabel: string
+  emptyText: string
+  windowLabel: string
+}
+
 type HeatmapMode = 'price' | 'usual' | 'stock'
 
 interface HeatmapBoard {
@@ -139,12 +178,35 @@ interface HeatmapView {
 }
 
 const PRICE_COLORS = ['#eab35e', '#7fb6e8', '#e98a7f', '#9bcf9f', '#c5a3e8']
+const PATH_COLORS = [
+  '#eab35e',
+  '#7fb6e8',
+  '#e98a7f',
+  '#9bcf9f',
+  '#c5a3e8',
+  '#f2d27a',
+  '#68c7c2',
+  '#d991c4',
+  '#a5b8d8',
+  '#d6a56f',
+  '#96d68f',
+  '#e6a0a0',
+  '#b0c4de',
+]
 const hiddenPriceItems = new Set<string>()
+const hiddenPathItems = new Set<string>()
+const openTwins = new Set<string>()
+let priceHistoryMarket = 'town'
 const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
 let activePriceView: PriceView | null = null
 let activePriceSignature = ''
 let activePriceReveal = 1
 let activeCaptionKey = ''
+let activePriceHistoryView: PriceHistoryView | null = null
+let activePriceHistoryKey = ''
+let activeStallView: StallView | null = null
+let activeStallKey = ''
+let activeCashKey = ''
 let activeVolumeView: VolumeView | null = null
 let activeVolumeCount = -1
 let activeMoneyFlowView: MoneyFlowView | null = null
@@ -173,6 +235,8 @@ interface WeekRun {
   startPrices: Map<ItemId, number>
   startMerchantCash: Map<MerchantId, number>
   priceView: PriceView
+  priceHistoryView: PriceHistoryView
+  stallView: StallView
   volumeView: VolumeView
   moneyFlowView: MoneyFlowView
   flowView: FlowView
@@ -336,6 +400,25 @@ function wireStaticEvents(): void {
   })
   $('view-live').addEventListener('click', returnToLive)
 
+  $('price-history-market').addEventListener('change', event => {
+    priceHistoryMarket = (event.target as HTMLSelectElement).value || 'town'
+    if (activePriceHistoryView?.mode === 'week' && weekRun) {
+      renderPriceHistoryCard(buildWeekPriceHistoryView(weekRun.payload), true)
+    } else if (activePriceHistoryView?.mode === 'live' && snapshot) {
+      renderPriceHistoryCard(buildLivePriceHistoryView(snapshot), true)
+    }
+  })
+
+  $('price-history-legend').addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-path-item]')
+    if (!button) return
+    const itemId = button.dataset.pathItem
+    if (!itemId) return
+    if (hiddenPathItems.has(itemId)) hiddenPathItems.delete(itemId)
+    else hiddenPathItems.add(itemId)
+    if (activePriceHistoryView) renderPriceHistoryCard(activePriceHistoryView, true)
+  })
+
   $('filter-group').addEventListener('change', event => {
     filters.group = (event.target as HTMLSelectElement).value
     renderEventStream()
@@ -432,6 +515,7 @@ function wireStaticEvents(): void {
     if (!band) return
     const x = Number(band.getAttribute('data-price-x'))
     if (!Number.isFinite(x)) return
+    setFromIndex('price', x)
     const rect = band.getBoundingClientRect()
     showPriceTooltip(x, rect.left + rect.width / 2, rect.top + Math.min(80, rect.height / 2))
   })
@@ -447,11 +531,30 @@ function wireStaticEvents(): void {
     cancelAnimationFrame(resizeFrame)
     resizeFrame = requestAnimationFrame(() => {
       if (activePriceView) renderPriceCard(activePriceView, activePriceReveal, true)
+      if (activePriceHistoryView) renderPriceHistoryCard(activePriceHistoryView, true)
       if (activeVolumeView) renderVolumeCard(activeVolumeView, activeVolumeCount, true)
       if (activeMoneyFlowView) renderMoneyFlowCard(activeMoneyFlowView, activeMoneyFlowReveal, true)
       if (activeFlowView) renderFlowCard(activeFlowView, activeFlowReveal, true)
+      if (activeStallView) {
+        renderStallRiskCard(activeStallView, true)
+        renderCashChangeCard(activeStallView, true)
+      }
+      refreshCrosshair()
     })
   })
+
+  for (const [id, elementId] of [
+    ['price', 'price-chart-wrap'],
+    ['price-history', 'price-history-chart-wrap'],
+    ['money', 'money-chart'],
+    ['flow', 'flow-chart'],
+    ['volume', 'volume-chart'],
+  ] as const) {
+    registerChart(id, $(elementId))
+  }
+  initCrosshair()
+  wireTwinToggles()
+  window.addEventListener('pagehide', destroyCrosshair)
 }
 
 function renderStaticRoster(): void {
@@ -477,6 +580,8 @@ async function boot(): Promise<void> {
   wireStaticEvents()
   renderStaticRoster()
   renderPriceCard(emptyPriceView('live'), 1, true)
+  renderPriceHistoryPlaceholder('The full item-by-item paths appear when the preview finishes.', true)
+  renderStallPlaceholders('The final stall risk map appears when the preview finishes.')
   renderWealthCard([], 1, 'live')
   renderVolumeCard(emptyVolumeView('live'), 0)
   renderMoneyFlowCard(
@@ -636,6 +741,10 @@ function renderLiveAll(): void {
     volumeSub: 'units · last 7 days',
   })
   renderPriceCard(buildLivePriceView(current), 1)
+  renderPriceHistoryCard(buildLivePriceHistoryView(current), true)
+  const stallView = buildLiveStallView(current)
+  renderStallRiskCard(stallView, true)
+  renderCashChangeCard(stallView, true)
   renderWealthCard(buildLiveWealthRows(current), 1, 'live')
   const volume = buildLiveVolumeView(current)
   renderVolumeCard(volume, volume.points.length)
@@ -920,6 +1029,257 @@ function buildLivePriceView(current: PublicSnapshot): PriceView {
     candidates,
     'Run the 7-day preview to draw a full week of prices.',
   )
+}
+
+function emptyPriceHistoryView(mode: 'live' | 'week'): PriceHistoryView {
+  return {
+    mode,
+    labels: [],
+    items: [],
+    markers: [],
+    key: `${mode}|empty`,
+    ariaLabel: 'Price paths with no recorded quotes yet.',
+    emptyText:
+      mode === 'week'
+        ? 'The preview did not include any item price snapshots.'
+        : 'Keep this page open to record daily item prices.',
+    sourceNote: 'Every recorded ask, indexed to its first close.',
+  }
+}
+
+interface PriceHistoryDay {
+  day: number
+  label: string
+  prices: Record<string, { bid: number | null; ask: number | null }>
+}
+
+function priceHistoryItems(days: PriceHistoryDay[], market: string): PriceItemView[] {
+  const byItem = new Map<ItemId, Array<{ x: number; price: number; label: string }>>()
+  for (let index = 0; index < days.length; index += 1) {
+    const day = days[index]
+    const prices = new Map<ItemId, number[]>()
+    for (const [key, quote] of Object.entries(day.prices)) {
+      const separator = key.indexOf(':')
+      if (separator < 0) continue
+      const merchantId = key.slice(0, separator)
+      const itemId = key.slice(separator + 1) as ItemId
+      if (market !== 'town' && merchantId !== market) continue
+      const price = quote.ask ?? quote.bid
+      if (price === null || !Number.isFinite(price) || price <= 0) continue
+      const list = prices.get(itemId) ?? []
+      list.push(price)
+      prices.set(itemId, list)
+    }
+    for (const [itemId, values] of prices) {
+      values.sort((left, right) => left - right)
+      const middle = Math.floor(values.length / 2)
+      const price =
+        values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle]
+      if (!Number.isFinite(price) || price <= 0) continue
+      const points = byItem.get(itemId) ?? []
+      points.push({ x: index, price, label: day.label })
+      byItem.set(itemId, points)
+    }
+  }
+
+  const ordered = config ? Object.keys(config.items) : []
+  const ids = [
+    ...ordered.filter(itemId => byItem.has(itemId as ItemId)),
+    ...[...byItem.keys()].filter(itemId => !ordered.includes(itemId)).sort(),
+  ] as ItemId[]
+  return ids.map((itemId, index) => {
+    const points = byItem.get(itemId) ?? []
+    const base = points[0]?.price ?? 1
+    return {
+      id: itemId,
+      label: itemLabel(itemId),
+      color: PATH_COLORS[index % PATH_COLORS.length],
+      base,
+      points: points.map(point => ({
+        x: point.x,
+        y: (point.price / base) * 100,
+        price: point.price,
+        label: `${point.label} close`,
+      })),
+    }
+  })
+}
+
+function priceHistoryMarkers(payload: FastForwardClonePayload): PriceMarker[] {
+  const kinds = new Set(['shock', 'bankruptcy', 'reopen'])
+  return (payload.annotations ?? [])
+    .filter(annotation => kinds.has(annotation.kind))
+    .map(annotation => ({
+      x: clamp(annotation.day - payload.startDay, 0, Math.max(0, payload.days - 1)),
+      label: annotation.title,
+      title: annotation.chain,
+      tone:
+        annotation.kind === 'shock'
+          ? ('shock' as const)
+          : annotation.kind === 'bankruptcy'
+            ? ('closure' as const)
+            : ('reopen' as const),
+      band: annotation.kind === 'shock',
+    }))
+    .slice(0, 12)
+}
+
+function buildWeekPriceHistoryView(payload: FastForwardClonePayload): PriceHistoryView {
+  const history = Array.isArray(payload.priceHistory) ? payload.priceHistory : []
+  if (history.length === 0) return emptyPriceHistoryView('week')
+  const days: PriceHistoryDay[] = history.map((point, index) => ({
+    day: point.day,
+    label: `D${index + 1}`,
+    prices: point.prices,
+  }))
+  const items = priceHistoryItems(days, priceHistoryMarket)
+  const markers = priceHistoryMarkers(payload)
+  const labels = days.map(day => day.label)
+  const marketName =
+    priceHistoryMarket === 'town'
+      ? 'town median'
+      : config?.merchants[priceHistoryMarket as MerchantId]?.displayName ?? priceHistoryMarket
+  return {
+    mode: 'week',
+    labels,
+    items,
+    markers,
+    key: `week|${priceHistoryMarket}|${labels.join('|')}|${items
+      .map(item => `${item.id}:${item.points.map(point => point.price.toFixed(3)).join(',')}`)
+      .join(';')}|${markers.map(marker => `${marker.x}:${marker.tone}:${marker.label}`).join(';')}`,
+    ariaLabel: `Price paths for every good at ${marketName}, indexed to the first recorded close over ${labels.length} simulated days. Markers show shocks, closures and reopens.`,
+    emptyText: 'No item quotes were recorded in this preview.',
+    sourceNote: `Every good · ${marketName} ask by day · indexed to the first close. ${markers.length} causal marker${markers.length === 1 ? '' : 's'}.`,
+  }
+}
+
+function buildLivePriceHistoryView(current: PublicSnapshot): PriceHistoryView {
+  const summaryDays = current.summaries.slice(-7).map(summary => summary.day)
+  const candidates = new Set<number>([...summaryDays, current.day])
+  const byDay = new Map<number, Record<string, { bid: number | null; ask: number | null }>>()
+  for (const [key, points] of priceHistory) {
+    for (const point of points) {
+      const day = Math.floor(point.x / 86400) + 1
+      if (!candidates.has(day)) continue
+      const record = byDay.get(day) ?? {}
+      record[key] = { bid: null, ask: point.y }
+      byDay.set(day, record)
+    }
+  }
+  const days: PriceHistoryDay[] = [...candidates]
+    .sort((left, right) => left - right)
+    .filter(day => byDay.has(day) || summaryDays.includes(day))
+    .map(day => ({
+      day,
+      label: day === current.day ? 'Today' : `D${day}`,
+      prices: byDay.get(day) ?? {},
+    }))
+  const items = priceHistoryItems(days, priceHistoryMarket)
+  if (days.length === 0 || items.length === 0) return emptyPriceHistoryView('live')
+  const marketName =
+    priceHistoryMarket === 'town'
+      ? 'town median'
+      : config?.merchants[priceHistoryMarket as MerchantId]?.displayName ?? priceHistoryMarket
+  return {
+    mode: 'live',
+    labels: days.map(day => day.label),
+    items,
+    markers: [],
+    key: `live|${priceHistoryMarket}|${days.map(day => day.label).join('|')}|${items
+      .map(item => `${item.id}:${item.points.map(point => point.price.toFixed(3)).join(',')}`)
+      .join(';')}`,
+    ariaLabel: `Recorded price paths for every good observed at ${marketName} in this browser session.`,
+    emptyText: 'Keep this page open to record daily item prices.',
+    sourceNote: `Recorded this session · ${marketName} ask by day · indexed to the first observation.`,
+  }
+}
+
+function stockCover(merchant: PublicMerchant): number {
+  let total = 0
+  let count = 0
+  for (const [itemId, target] of Object.entries(merchant.targetStock)) {
+    if (!Number.isFinite(target) || target <= 0) continue
+    total += Math.max(0, merchant.stock[itemId as ItemId] ?? 0) / target
+    count += 1
+  }
+  return count > 0 ? total / count : 0
+}
+
+function stallRow(
+  merchant: PublicMerchant,
+  startCash: number,
+  endCash: number,
+): StallRowView {
+  const reserve = Math.max(1, merchant.reserve)
+  return {
+    id: merchant.id,
+    label: merchant.displayName,
+    short: merchant.displayName.split(' ')[0],
+    cash: endCash,
+    reserve,
+    liquidity: endCash / reserve,
+    stockCover: stockCover(merchant),
+    delta: endCash - startCash,
+    start: startCash,
+    end: endCash,
+    open: merchant.open,
+    bankrupt: merchant.bankrupt,
+  }
+}
+
+function emptyStallView(mode: 'live' | 'week'): StallView {
+  return {
+    mode,
+    rows: [],
+    key: `${mode}|empty`,
+    ariaLabel: 'Stall risk map with no observations yet.',
+    emptyText:
+      mode === 'week'
+        ? 'The final stall state was not included in this preview.'
+        : 'Stall risk appears when the market has closed a day.',
+    windowLabel: mode === 'week' ? 'the week' : 'today',
+  }
+}
+
+function buildWeekStallView(
+  payload: FastForwardClonePayload,
+  startSnapshot: PublicSnapshot | null,
+): StallView {
+  const finals = Array.isArray(payload.finalMerchants) ? payload.finalMerchants : []
+  const starts = new Map((startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant.cash]))
+  const rows = finals
+    .map(merchant => stallRow(merchant, starts.get(merchant.id) ?? merchant.cash, merchant.cash))
+    .sort((left, right) => right.delta - left.delta || right.cash - left.cash)
+  if (rows.length === 0) return emptyStallView('week')
+  return {
+    mode: 'week',
+    rows,
+    key: `week|${rows.map(row => `${row.id}:${row.cash}:${row.delta}:${row.stockCover}`).join('|')}`,
+    ariaLabel: 'Per-stall liquidity, stock cover and cash attribution for the simulated week.',
+    emptyText: 'The final stall state was not included in this preview.',
+    windowLabel: 'the week',
+  }
+}
+
+function buildLiveStallView(current: PublicSnapshot): StallView {
+  const rows = current.merchants
+    .map(merchant =>
+      stallRow(
+        merchant,
+        current.daily.merchantCashStart[merchant.id] ?? merchant.cash,
+        merchant.cash,
+      ),
+    )
+    .sort((left, right) => right.delta - left.delta || right.cash - left.cash)
+  if (rows.length === 0) return emptyStallView('live')
+  return {
+    mode: 'live',
+    rows,
+    key: `live|${rows.map(row => `${row.id}:${row.cash}:${row.delta}:${row.stockCover}`).join('|')}`,
+    ariaLabel: 'Current per-stall liquidity, stock cover and cash change today.',
+    emptyText: 'Waiting for merchant tills…',
+    windowLabel: 'today',
+  }
 }
 
 function buildWeekVolumeView(payload: FastForwardClonePayload): VolumeView {
@@ -1301,6 +1661,8 @@ function renderMoneyFlowCard(view: MoneyFlowView, revealCount: number, force = f
     valueFormat: value => moneyCompact(value),
   })
   $('money-caption').textContent = moneyFlowCaption(view, revealCount)
+  syncTwin('money', moneyTwin(view, revealCount))
+  updateChart('money', view.points.map(point => point.label), Math.max(0, revealCount - 1))
 }
 
 function flowCaption(view: FlowView, revealCount: number): string {
@@ -1341,6 +1703,8 @@ function renderFlowCard(view: FlowView, revealCount: number, force = false): voi
     valueFormat: value => moneyCompact(value),
   })
   $('flow-caption').textContent = flowCaption(view, revealCount)
+  syncTwin('flow', flowTwin(view, revealCount))
+  updateChart('flow', view.points.map(point => point.label), Math.max(0, revealCount - 1))
 }
 
 /* ------------------------------------------------------------------ market map rendering */
@@ -1417,6 +1781,370 @@ function renderHeatmapPlaceholder(text: string, force = false): void {
       : 'Waiting for merchant quotes…'
 }
 
+/* ------------------------------------------------------------------ table twins + new observatory cards */
+
+interface TwinRow {
+  label: string
+  cells: string[]
+}
+
+function twinTable(caption: string, columns: string[], rows: TwinRow[]): string {
+  if (rows.length === 0) return `<p class="empty-note">${esc(caption)}</p>`
+  return `<div class="twin-scroll"><table class="twin-table">
+    <caption>${esc(caption)}</caption>
+    <thead><tr>${columns.map(column => `<th scope="col">${esc(column)}</th>`).join('')}</tr></thead>
+    <tbody>${rows
+      .map(
+        row =>
+          `<tr><th scope="row">${esc(row.label)}</th>${row.cells
+            .map(cell => `<td>${esc(cell)}</td>`)
+            .join('')}</tr>`,
+      )
+      .join('')}</tbody>
+  </table></div>`
+}
+
+function syncTwin(id: string, html: string): void {
+  const panel = document.getElementById(`${id}-table`)
+  if (panel) panel.innerHTML = html
+}
+
+function setTwinButton(id: string, button: HTMLElement, open: boolean): void {
+  button.textContent = open ? 'Show chart' : 'Show table'
+  button.setAttribute('aria-pressed', String(open))
+  button.setAttribute('aria-label', open ? 'Show chart instead of table' : 'Show data table instead of chart')
+}
+
+function toggleTwin(button: HTMLButtonElement): void {
+  const id = button.dataset.twin
+  const chartId = button.dataset.twinChart
+  if (!id || !chartId) return
+  const panel = document.getElementById(`${id}-table`)
+  const chart = document.getElementById(chartId)
+  if (!panel || !chart) return
+  const open = panel.hidden
+  panel.hidden = !open
+  chart.hidden = open
+  if (open) openTwins.add(id)
+  else openTwins.delete(id)
+  setTwinButton(id, button, open)
+  if (!open) {
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'))
+      refreshCrosshair()
+    })
+  }
+}
+
+function wireTwinToggles(): void {
+  document.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-twin]')
+    if (!button) return
+    toggleTwin(button)
+  })
+}
+
+function priceHistoryChartSize(): { width: number; height: number } {
+  const width = Math.max(280, Math.round($('price-history-chart-wrap').clientWidth || 900))
+  const ratio = width < 560 ? 0.8 : 0.48
+  const height = Math.round(Math.max(260, Math.min(560, width * ratio)))
+  return { width, height }
+}
+
+function visiblePathItems(view: PriceHistoryView): PriceItemView[] {
+  return view.items.filter(item => !hiddenPathItems.has(item.id))
+}
+
+function renderPathLegend(view: PriceHistoryView): void {
+  const legend = $('price-history-legend')
+  if (view.items.length === 0) {
+    legend.innerHTML = '<span class="legend-empty">No item quotes recorded yet.</span>'
+    return
+  }
+  legend.innerHTML = view.items
+    .map(item => {
+      const shown = !hiddenPathItems.has(item.id)
+      return `<button class="price-key${shown ? '' : ' is-off'}" type="button" data-path-item="${esc(
+        item.id,
+      )}" aria-pressed="${shown}" aria-label="${esc(item.label)} — ${shown ? 'shown' : 'hidden'}. Click to ${
+        shown ? 'hide' : 'show'
+      }." style="--series-color:${item.color}">
+        <span class="price-key-swatch" aria-hidden="true"></span>
+        <span class="price-key-name">${esc(item.label)}</span>
+      </button>`
+    })
+    .join('')
+}
+
+function updatePriceHistoryMarkets(view: PriceHistoryView): void {
+  const select = $('price-history-market') as HTMLSelectElement
+  const options = ['town', ...(config ? Object.keys(config.merchants) : [])]
+  if (!options.includes(priceHistoryMarket)) priceHistoryMarket = 'town'
+  select.innerHTML = options
+    .map(value =>
+      value === 'town'
+        ? `<option value="town">Town median</option>`
+        : `<option value="${esc(value)}">${esc(config?.merchants[value as MerchantId]?.displayName ?? value)}</option>`,
+    )
+    .join('')
+  select.value = priceHistoryMarket
+  const marketLabel =
+    priceHistoryMarket === 'town'
+      ? 'town median'
+      : config?.merchants[priceHistoryMarket as MerchantId]?.displayName ?? priceHistoryMarket
+  $('price-history-sub').textContent = `All goods, ${view.mode === 'week' ? 'each simulated day' : 'recorded this session'} · ${marketLabel}.`
+}
+
+function priceHistoryCaption(view: PriceHistoryView): string {
+  if (view.items.length === 0) return view.emptyText
+  const visible = visiblePathItems(view)
+  if (visible.length === 0) return 'All price paths are hidden — choose a good above to bring one back.'
+  const changes = visible
+    .map(item => {
+      const first = item.points[0]
+      const last = item.points[item.points.length - 1]
+      return first && last && first.price > 0
+        ? { item, change: ((last.price - first.price) / first.price) * 100 }
+        : null
+    })
+    .filter((value): value is { item: PriceItemView; change: number } => Boolean(value))
+    .sort((left, right) => Math.abs(right.change) - Math.abs(left.change))
+  if (changes.length === 0) return `${visible.length} goods on the board.`
+  const biggest = changes[0]
+  const direction = biggest.change < 0 ? 'cheaper' : 'dearer'
+  return `${visible.length} of ${view.items.length} goods shown. Biggest move: ${biggest.item.label} ${Math.max(
+    1,
+    Math.round(Math.abs(biggest.change)),
+  )}% ${direction} from its first close.`
+}
+
+function priceHistoryTwin(view: PriceHistoryView): string {
+  const visible = visiblePathItems(view)
+  if (visible.length === 0) return twinTable('Price table — all price paths are hidden.', ['Good'], [])
+  const rows: TwinRow[] = visible.map(item => ({
+    label: item.label,
+    cells: view.labels.map((_label, index) => {
+      const point = item.points.find(candidate => candidate.x === index)
+      return point ? money(point.price) : '—'
+    }),
+  }))
+  return twinTable(
+    view.mode === 'week' ? 'Exact asks by good and simulated day' : 'Exact asks by good and recorded day',
+    ['Good', ...view.labels],
+    rows,
+  )
+}
+
+function renderPriceHistoryCard(view: PriceHistoryView, force = false): void {
+  const visible = visiblePathItems(view)
+  const signature = `${view.key}|${[...hiddenPathItems].sort().join(',')}`
+  if (force || signature !== activePriceHistoryKey) {
+    activePriceHistoryView = view
+    activePriceHistoryKey = signature
+    updatePriceHistoryMarkets(view)
+    renderPathLegend(view)
+    const series: PriceSeries[] = visible.map(item => ({
+      id: item.id,
+      label: item.label,
+      color: item.color,
+      points: item.points,
+    }))
+    const size = priceHistoryChartSize()
+    $('price-history-chart').innerHTML = renderPriceSvg(series, {
+      width: size.width,
+      height: size.height,
+      labels: view.labels,
+      reveal: 1,
+      markers: view.markers,
+      ariaLabel: view.ariaLabel,
+      emptyText: view.emptyText,
+      valueFormat: value => money(value),
+      dayAriaLabel: index => {
+        const label = view.labels[index] ?? 'Day'
+        const rows = view.items
+          .filter(item => !hiddenPathItems.has(item.id))
+          .map(item => {
+            const point = item.points.find(candidate => candidate.x === index)
+            return `${item.label}: ${point ? money(point.price) : 'no quote'}`
+          })
+        return `${label}. ${rows.join('. ')}.`
+      },
+    })
+  } else {
+    activePriceHistoryView = view
+  }
+  $('price-history-caption').textContent = priceHistoryCaption(view)
+  $('price-history-source').textContent = view.sourceNote
+  syncTwin('price-history', priceHistoryTwin(view))
+  updateChart('price-history', view.labels, Math.max(0, view.labels.length - 1))
+}
+
+function renderPriceHistoryPlaceholder(text: string, force = false): void {
+  if (!force && activePriceHistoryKey === 'placeholder') return
+  activePriceHistoryView = null
+  activePriceHistoryKey = 'placeholder'
+  const select = $('price-history-market') as HTMLSelectElement
+  select.innerHTML = '<option value="town">Town median</option>'
+  select.value = 'town'
+  $('price-history-legend').innerHTML = '<span class="legend-empty">The full paths are being simulated.</span>'
+  const size = priceHistoryChartSize()
+  $('price-history-chart').innerHTML = renderPriceSvg([], {
+    width: size.width,
+    height: size.height,
+    labels: ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'],
+    reveal: 0,
+    emptyText: text,
+  })
+  $('price-history-caption').textContent = text
+  $('price-history-source').textContent = 'Preview only · the full item-by-item path is captured at each simulated close.'
+  syncTwin('price-history', twinTable('The full price table appears when the preview finishes.', ['Good'], []))
+  updateChart('price-history', [], 0)
+}
+
+function riskChartSize(): { width: number; height: number } {
+  const width = Math.max(260, Math.round($('risk-chart').clientWidth || 540))
+  return { width, height: Math.round(Math.max(260, Math.min(390, width * 0.62))) }
+}
+
+function cashChangeChartSize(): { width: number; height: number } {
+  const width = Math.max(260, Math.round($('cash-change-chart').clientWidth || 540))
+  return { width, height: Math.round(Math.max(250, Math.min(360, width * 0.56))) }
+}
+
+function stallRiskCaption(view: StallView): string {
+  if (view.rows.length === 0) return view.emptyText
+  const thinCash = view.rows.filter(row => row.liquidity < 1).length
+  const thinStock = view.rows.filter(row => row.stockCover < 0.8).length
+  const loss = [...view.rows].sort((left, right) => left.delta - right.delta)[0]
+  let text = `${thinCash} of ${view.rows.length} stalls below reserve; ${thinStock} below 80% stock cover.`
+  if (loss && loss.delta < -0.5) text += ` Biggest cash loss: ${loss.label} ${money(loss.delta)}.`
+  else text += ' No stall lost cash on this window.'
+  return text
+}
+
+function cashChangeCaption(view: StallView): string {
+  if (view.rows.length === 0) return view.emptyText
+  const gained = view.rows.filter(row => row.delta > 0.5)
+  const lost = view.rows.filter(row => row.delta < -0.5)
+  const biggest = [...view.rows].sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))[0]
+  let text = `${gained.length} till${gained.length === 1 ? '' : 's'} up, ${lost.length} down ${
+    view.mode === 'week' ? 'over the week' : 'today'
+  }.`
+  if (biggest && Math.abs(biggest.delta) >= 0.5) {
+    text += ` Largest move: ${biggest.label} ${biggest.delta > 0 ? '+' : '−'}${money(Math.abs(biggest.delta))}.`
+  }
+  return text
+}
+
+function stallRiskTable(view: StallView): string {
+  return twinTable(
+    view.mode === 'week' ? 'Liquidity, stock cover and cash attribution for the preview week' : 'Current stall liquidity, stock cover and today\'s cash change',
+    ['Stall', 'Cash', 'Reserve', 'Liquidity', 'Stock cover', 'Cash change', 'State'],
+    view.rows.map(row => ({
+      label: row.label,
+      cells: [
+        money(row.cash),
+        money(row.reserve),
+        `${row.liquidity.toFixed(2)}×`,
+        `${Math.round(row.stockCover * 100)}%`,
+        `${row.delta >= 0 ? '+' : '−'}${money(Math.abs(row.delta))}`,
+        row.bankrupt ? 'closed' : row.open ? 'open' : 'closed',
+      ],
+    })),
+  )
+}
+
+function cashChangeTable(view: StallView): string {
+  return twinTable(
+    view.mode === 'week' ? 'Per-stall cash, start to end of the preview week' : 'Per-stall cash, start to now',
+    ['Stall', 'Start', 'End', 'Change', 'State'],
+    view.rows.map(row => ({
+      label: row.label,
+      cells: [
+        money(row.start),
+        money(row.end),
+        `${row.delta >= 0 ? '+' : '−'}${money(Math.abs(row.delta))}`,
+        row.bankrupt ? 'closed' : row.open ? 'open' : 'closed',
+      ],
+    })),
+  )
+}
+
+function renderStallRiskCard(view: StallView, force = false): void {
+  if (!force && activeStallView === view && activeStallKey === view.key) return
+  activeStallView = view
+  activeStallKey = view.key
+  const size = riskChartSize()
+  $('risk-chart').innerHTML = renderRiskSvg(view.rows, {
+    width: size.width,
+    height: size.height,
+    ariaLabel: view.ariaLabel,
+    emptyText: view.emptyText,
+    valueFormat: value => money0(value),
+  })
+  $('risk-legend').innerHTML =
+    view.rows.length === 0
+      ? ''
+      : view.rows
+          .map(
+            (row, index) =>
+              `<span class="risk-key"><b>${index + 1}</b>${esc(row.label)} <em>${row.liquidity.toFixed(1)}× · ${Math.round(
+                row.stockCover * 100,
+              )}%</em></span>`,
+          )
+          .join('')
+  $('risk-caption').textContent = stallRiskCaption(view)
+  $('risk-sub').textContent =
+    view.mode === 'week'
+      ? 'Final cash ÷ reserve against final stock cover. Bubble size is cash change since week open; green gained, red lost.'
+      : 'Cash ÷ reserve against stock cover now. Bubble size is today\'s cash change; green gained, red lost.'
+  syncTwin('risk', stallRiskTable(view))
+}
+
+function renderCashChangeCard(view: StallView, force = false): void {
+  if (!force && activeCashKey === view.key) return
+  activeCashKey = view.key
+  const size = cashChangeChartSize()
+  const points: CashChangePoint[] = view.rows.map(row => ({
+    id: row.id,
+    label: row.label,
+    start: row.start,
+    end: row.end,
+    delta: row.delta,
+    open: row.open,
+    bankrupt: row.bankrupt,
+  }))
+  $('cash-change-chart').innerHTML = renderCashChangeSvg(points, {
+    width: size.width,
+    height: size.height,
+    windowLabel: view.windowLabel,
+    ariaLabel: view.mode === 'week' ? 'Per-stall cash change over the preview week' : 'Per-stall cash change today',
+    emptyText: view.emptyText,
+    valueFormat: value => money0(value),
+  })
+  $('cash-change-caption').textContent = cashChangeCaption(view)
+  $('cash-change-sub').textContent =
+    view.mode === 'week'
+      ? 'Final cash minus week-open cash for every stall. Bars are sorted by change; exact values are in the table.'
+      : 'Cash now minus today\'s opening cash. Bars are sorted by change; exact values are in the table.'
+  syncTwin('cash-change', cashChangeTable(view))
+}
+
+function renderStallPlaceholders(text: string): void {
+  activeStallView = null
+  activeStallKey = 'placeholder'
+  activeCashKey = 'placeholder'
+  $('risk-chart').innerHTML = `<p class="empty-note">${esc(text)}</p>`
+  $('cash-change-chart').innerHTML = `<p class="empty-note">${esc(text)}</p>`
+  $('risk-legend').innerHTML = ''
+  $('risk-caption').textContent = text
+  $('cash-change-caption').textContent = text
+  $('risk-sub').textContent = 'Final cash ÷ reserve against final stock cover; bubble size is cash change.'
+  $('cash-change-sub').textContent = 'Each stall\'s final cash change from the start of the window.'
+  syncTwin('risk', twinTable(text, ['Stall'], []))
+  syncTwin('cash-change', twinTable(text, ['Stall'], []))
+}
+
 function buildWeekWealthRows(payload: FastForwardClonePayload, startSnapshot: PublicSnapshot | null): WealthRowView[] {
   const startCash = new Map<MerchantId, number>(
     (startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant.cash]),
@@ -1473,6 +2201,92 @@ function signedPercent(value: number): string {
 
 function visiblePriceItems(view: PriceView): PriceItemView[] {
   return view.items.filter(item => !hiddenPriceItems.has(item.id) && item.points.length > 0)
+}
+
+function priceTwin(view: PriceView, reveal: number): string {
+  const items = visiblePriceItems(view)
+  if (items.length === 0) return twinTable('Price table — no lines selected.', ['Day'], [])
+  const bucket = priceRevealBucket(view, reveal)
+  return twinTable(
+    view.mode === 'week' ? 'Exact prices by recorded day' : 'Exact prices by recorded day and now',
+    ['Day', ...items.map(item => item.label)],
+    view.labels.map((label, index) => ({
+      label,
+      cells: items.map(item => {
+        if (view.mode === 'week' && index > bucket) return 'not yet'
+        const point = item.points.find(candidate => candidate.x === index)
+        return point ? money(point.price) : '—'
+      }),
+    })),
+  )
+}
+
+function moneyTwin(view: MoneyFlowView, revealCount: number): string {
+  return twinTable(
+    'Town cash split by day',
+    ['Day', 'Merchant tills', 'Traveler wallets', 'Total'],
+    view.points.map((point, index) => ({
+      label: point.label,
+      cells:
+        index < revealCount
+          ? [money(point.merchant), money(point.traveler), money(point.merchant + point.traveler)]
+          : ['not yet', 'not yet', 'not yet'],
+    })),
+  )
+}
+
+function flowTwin(view: FlowView, revealCount: number): string {
+  return twinTable(
+    'External cash flows by day',
+    ['Day', 'Inflow', 'Outflow', 'Net', 'Orders', 'Caravan in', 'Caravan out', 'Sinks'],
+    view.points.map((point, index) => ({
+      label: point.label,
+      cells:
+        index < revealCount
+          ? [
+              money(point.inflow),
+              money(point.outflow),
+              `${point.net >= 0 ? '+' : '−'}${money(Math.abs(point.net))}`,
+              money(point.orders),
+              money(point.caravanIn),
+              money(point.caravanOut),
+              money(point.sinks),
+            ]
+          : ['not yet', 'not yet', 'not yet', 'not yet', 'not yet', 'not yet', 'not yet'],
+    })),
+  )
+}
+
+function wealthTwin(rows: WealthRowView[], mode: 'live' | 'week'): string {
+  if (rows.length === 0) return twinTable('Merchant cash — no stalls recorded.', ['Stall'], [])
+  return twinTable(
+    mode === 'week' ? 'Per-stall cash from week open to week close' : 'Per-stall cash from the start of today to now',
+    ['Stall', 'Start', 'End', 'Change', 'Reserve', 'State'],
+    rows.map(row => {
+      const start = row.cash - row.delta
+      return {
+        label: row.name,
+        cells: [
+          money(start),
+          money(row.cash),
+          `${row.delta >= 0 ? '+' : '−'}${money(Math.abs(row.delta))}`,
+          money(row.reserve),
+          row.bankrupt ? 'closed' : row.open ? 'open' : 'closed',
+        ],
+      }
+    }),
+  )
+}
+
+function volumeTwin(view: VolumeView, revealCount: number): string {
+  return twinTable(
+    'Trade volume by day',
+    ['Day', 'Units traded', 'Note'],
+    view.points.map((point, index) => ({
+      label: point.label,
+      cells: index < revealCount ? [formatNumber(point.volume), point.note ?? '—'] : ['not yet', 'not yet'],
+    })),
+  )
 }
 
 function priceChartSize(): { width: number; height: number } {
@@ -1621,6 +2435,8 @@ function renderPriceCard(view: PriceView, reveal: number, force = false): void {
 
   updatePriceReveal(reveal)
   const bucket = priceRevealBucket(view, reveal)
+  syncTwin('price', priceTwin(view, reveal))
+  updateChart('price', view.labels, bucket)
   const captionKey = `${signature}|${bucket}`
   if (captionKey !== activeCaptionKey) {
     activeCaptionKey = captionKey
@@ -1733,6 +2549,7 @@ function renderWealthCard(rows: WealthRowView[], reveal: number, mode: 'live' | 
       ? 'Final cash · colour = change from week open · tick = reserve. Stock is in the market map.'
       : 'Cash now · colour = change today · tick = reserve. Stock is in the market map.'
   $('wealth-caption').textContent = wealthCaption(rows, mode)
+  syncTwin('wealth', wealthTwin(rows, mode))
   if (rows.length === 0) {
     chart.innerHTML = '<p class="empty-note">Waiting for the merchant tills…</p>'
     return
@@ -1800,6 +2617,8 @@ function renderVolumeCard(view: VolumeView, revealCount: number, force = false):
     valueFormat: value => formatNumber(value),
   })
   $('volume-caption').textContent = volumeCaption(view, revealCount)
+  syncTwin('volume', volumeTwin(view, revealCount))
+  updateChart('volume', view.points.map(point => point.label), Math.max(0, revealCount - 1))
 }
 
 /* ------------------------------------------------------------------ bot activity chart */
@@ -2283,7 +3102,7 @@ function eventPriority(type: MarketEventType): number {
 
 function annotationPriority(kind: FastForwardAnnotation['kind']): number {
   if (kind === 'bankruptcy' || kind === 'reopen') return 0
-  if (kind === 'recovery' || kind === 'distribution' || kind === 'order-expired') return 1
+  if (kind === 'shock' || kind === 'recovery' || kind === 'distribution' || kind === 'order-expired') return 1
   if (kind === 'caravan') return 2
   if (kind === 'rent') return 3
   return 4
@@ -2322,6 +3141,7 @@ function eventTone(type: MarketEventType): StoryTone {
 
 function annotationKindLabel(kind: FastForwardAnnotation['kind']): string {
   if (kind === 'bankruptcy') return 'Stall closed'
+  if (kind === 'shock') return 'Market shock'
   if (kind === 'reopen') return 'Stall reopened'
   if (kind === 'caravan') return 'Caravan'
   if (kind === 'rent') return 'Rent'
@@ -2332,7 +3152,7 @@ function annotationKindLabel(kind: FastForwardAnnotation['kind']): string {
 }
 
 function annotationTone(kind: FastForwardAnnotation['kind']): StoryTone {
-  if (kind === 'bankruptcy') return 'risk'
+  if (kind === 'bankruptcy' || kind === 'shock') return 'risk'
   if (kind === 'reopen' || kind === 'recovery' || kind === 'distribution') return 'good'
   if (kind === 'caravan') return 'money'
   if (kind === 'rent') return 'day'
@@ -2381,6 +3201,9 @@ async function startFastForward(): Promise<void> {
 
 function startWeekRun(payload: FastForwardClonePayload): void {
   const startSnapshot = snapshot
+  priceHistoryMarket = 'town'
+  hiddenPathItems.clear()
+  resetCrosshair()
   const startCash = startSnapshot ? townCash(startSnapshot) : 0
   const startOpen = startSnapshot ? openStalls(startSnapshot) : recapOpenStalls(payload.recap)
   const state: WeekRun = {
@@ -2393,6 +3216,8 @@ function startWeekRun(payload: FastForwardClonePayload): void {
     startPrices: startSnapshot ? averageAskByItem(startSnapshot) : new Map(),
     startMerchantCash: new Map((startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant.cash])),
     priceView: buildWeekPriceView(payload, startSnapshot),
+    priceHistoryView: buildWeekPriceHistoryView(payload),
+    stallView: buildWeekStallView(payload, startSnapshot),
     volumeView: buildWeekVolumeView(payload),
     moneyFlowView: buildWeekMoneyFlowView(payload),
     flowView: buildWeekFlowView(payload),
@@ -2422,6 +3247,13 @@ function startWeekRun(payload: FastForwardClonePayload): void {
   activeFlowReveal = -1
   activeHeatmapView = null
   activeHeatmapKey = ''
+  activePriceHistoryView = null
+  activePriceHistoryKey = ''
+  activeStallView = null
+  activeStallKey = ''
+  activeCashKey = ''
+  renderPriceHistoryPlaceholder('The full item-by-item paths appear when the preview finishes.', true)
+  renderStallPlaceholders('The final stall risk map appears when the preview finishes.')
   renderWealthCard(state.wealthRows, 0, 'week')
 
   $('hero-context').textContent = 'Simulated 7-day preview · not saved'
@@ -2515,6 +3347,11 @@ function renderWeekFrame(state: WeekRun, simTime: number, complete: boolean, for
   renderFlowCard(state.flowView, complete ? state.flowView.points.length : revealed.length)
   if (complete) renderHeatmapCard(state.heatmapView, force)
   else renderHeatmapPlaceholder('The final market map appears when the preview finishes.')
+  if (complete) {
+    renderPriceHistoryCard(state.priceHistoryView, force)
+    renderStallRiskCard(state.stallView, force)
+    renderCashChangeCard(state.stallView, force)
+  }
   updateWealthReveal(chartReveal)
 
   if (!changed) return
@@ -2678,6 +3515,14 @@ function returnToLive(): void {
   activeFlowReveal = -1
   activeHeatmapView = null
   activeHeatmapKey = ''
+  activePriceHistoryView = null
+  activePriceHistoryKey = ''
+  activeStallView = null
+  activeStallKey = ''
+  activeCashKey = ''
+  priceHistoryMarket = 'town'
+  hiddenPathItems.clear()
+  resetCrosshair()
   $('ff-strip').hidden = true
   $('ff-strip').classList.remove('is-error')
   $('ff-status').textContent = 'Ready.'
@@ -2703,7 +3548,7 @@ function seedPriceHistory(): void {
 }
 
 function pushPricePoint(merchantId: string, itemId: string, time: number, price: number): void {
-  const key = `${merchantId}|${itemId}`
+  const key = `${merchantId}:${itemId}`
   const series = priceHistory.get(key) ?? []
   const last = series[series.length - 1]
   if (last && last.x === time) {
@@ -2755,7 +3600,7 @@ function renderMerchantCards(overrides?: Map<MerchantId, MerchantMirror>): void 
     const reserveRatio = Math.max(0, Math.min(1, cash / Math.max(1e-6, merchant.reserve * 1.8)))
     const keyItem = config.merchants[merchant.id]?.sells?.[0]
     const ask = keyItem ? merchant.askPrices[keyItem] : undefined
-    const spark = keyItem ? priceHistory.get(`${merchant.id}|${keyItem}`) ?? [] : []
+    const spark = keyItem ? priceHistory.get(`${merchant.id}:${keyItem}`) ?? [] : []
     const stock = sum(Object.values(merchant.stock).filter(quantity => quantity > 0))
 
     return `<article class="mcard ${state === 'closed' || state === 'bankrupt' ? 'closed' : ''}" data-merchant="${esc(merchant.id)}">

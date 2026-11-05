@@ -47,11 +47,26 @@ export interface PriceSeries {
   points: PricePoint[]
 }
 
+export type PriceMarkerTone = 'shock' | 'closure' | 'reopen' | 'neutral'
+
+/** A causal beat drawn over a price path (shock, closure, reopen). */
+export interface PriceMarker {
+  /** Position on the day axis, matching the chart's point x positions. */
+  x: number
+  label: string
+  title: string
+  tone: PriceMarkerTone
+  /** Draw a soft band across the day as well as a marker. */
+  band?: boolean
+}
+
 export interface PriceChartOptions {
   width?: number
   height?: number
   /** Axis labels, left to right. */
   labels: string[]
+  /** Causal beats drawn behind the lines. */
+  markers?: PriceMarker[]
   /** Value at the 0% line. Defaults to 100. */
   baseline?: number
   ariaLabel?: string
@@ -313,6 +328,35 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
     })
     .join('')
 
+  const markerColors: Record<PriceMarkerTone, string> = {
+    shock: '#e07a6b',
+    closure: '#eab35e',
+    reopen: '#76c79a',
+    neutral: '#8aa4c8',
+  }
+  const markerBandWidth = Math.max(4, plotW / Math.max(1, labelCount - 1) * 0.62)
+  const markers = (options.markers ?? [])
+    .filter(marker => Number.isFinite(marker.x) && marker.x >= -0.001 && marker.x <= labelCount - 1 + 0.001)
+    .map((marker, index) => {
+      const x = scaleX(marker.x)
+      const color = markerColors[marker.tone]
+      const band =
+        marker.band === false
+          ? ''
+          : `<rect class="price-marker-band" x="${(x - markerBandWidth / 2).toFixed(1)}" y="${pad.top}" width="${markerBandWidth.toFixed(
+              1,
+            )}" height="${plotH}" fill="${color}" opacity="0.065"/>`
+      return `<g class="price-marker price-marker-${marker.tone}" data-marker-index="${index}">
+        <title>${esc(`${marker.label} · ${marker.title}`)}</title>
+        ${band}
+        <line class="price-marker-line" x1="${x.toFixed(1)}" y1="${pad.top}" x2="${x.toFixed(1)}" y2="${plotBottom}" stroke="${color}" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.72"/>
+        <path d="M${(x - 4.5).toFixed(1)},${(pad.top - 11).toFixed(1)} L${(x + 4.5).toFixed(1)},${(pad.top - 11).toFixed(
+          1,
+        )} L${x.toFixed(1)},${(pad.top - 4).toFixed(1)} Z" fill="${color}" opacity="0.92"/>
+      </g>`
+    })
+    .join('')
+
   const priceSeries = series
     .map(item => {
       const points = [...item.points]
@@ -423,7 +467,7 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
 
   return `<svg class="chart-svg price-svg" viewBox="0 0 ${width} ${height}" role="group" aria-label="${esc(
     summary,
-  )}" data-plot-left="${plotLeft}" data-plot-width="${plotW.toFixed(1)}" data-plot-top="${pad.top}" data-plot-height="${plotH}">
+  )}" data-plot-left="${plotLeft}" data-plot-width="${plotW.toFixed(1)}" data-plot-top="${pad.top}" data-plot-height="${plotH}" data-plot-kind="points">
     <title>${esc(summary)}</title>
     <desc>${esc(options.emptyText ?? 'Recorded merchant quotes across the week.')}</desc>
     <defs>
@@ -434,7 +478,7 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
       </clipPath>
     </defs>
     <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="12" fill="rgba(255,255,255,0.012)"/>
-    ${grid}${xLabels}
+    ${grid}${xLabels}${markers}
     <g clip-path="url(#price-reveal-clip)">${priceSeries}</g>
     <g class="price-start-layer">${startLayer}</g>
     ${playhead}
@@ -523,7 +567,7 @@ export function renderVolumeChart(points: VolumePoint[], options: VolumeChartOpt
 
   return `<svg class="chart-svg volume-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
     options.ariaLabel ?? 'Daily trade volume',
-  )}">
+  )}" data-plot-left="${plotLeft}" data-plot-width="${plotW.toFixed(1)}" data-plot-top="${pad.top}" data-plot-height="${plotH}" data-plot-kind="bars" data-slot-count="${points.length}">
     <title>${esc(options.ariaLabel ?? 'Daily trade volume')}</title>
     <desc>${esc(options.emptyText ?? 'Bars show units traded each day; empty slots are days not yet revealed.')}</desc>
     <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.012)"/>
@@ -685,7 +729,7 @@ export function renderMoneyFlowChart(
 
   return `<svg class="chart-svg money-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
     options.ariaLabel ?? 'Town cash split by day',
-  )}">
+  )}" data-plot-left="${plotLeft}" data-plot-width="${plotW.toFixed(1)}" data-plot-top="${pad.top}" data-plot-height="${plotH}" data-plot-kind="bars" data-slot-count="${points.length}">
     <title>${esc(options.ariaLabel ?? 'Town cash split by day')}</title>
     <desc>${esc(
       'Stacked bars show merchant tills and traveler wallets; the gold line is total cash in town.',
@@ -831,7 +875,7 @@ export function renderFlowChart(
 
   return `<svg class="chart-svg flow-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
     options.ariaLabel ?? 'External money flows by day',
-  )}">
+  )}" data-plot-left="${plotLeft}" data-plot-width="${plotW.toFixed(1)}" data-plot-top="${pad.top}" data-plot-height="${plotH}" data-plot-kind="bars" data-slot-count="${points.length}">
     <title>${esc(options.ariaLabel ?? 'External money flows by day')}</title>
     <desc>${esc(
       'Green bars are external inflows; red bars are drains. The gold line is net flow. Trades inside town are excluded because they only move cash between tills and wallets.',
@@ -840,6 +884,318 @@ export function renderFlowChart(
     ${grid}${bars}
     <path d="${netPath}" fill="none" stroke="#eab35e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
     ${netDots}${xLabels}
+  </svg>`
+}
+
+/* ------------------------------------------------------------------ stall risk */
+
+export interface RiskPoint {
+  id: string
+  label: string
+  short: string
+  cash: number
+  reserve: number
+  /** cash / reserve, already clamped by the caller only when displaying. */
+  liquidity: number
+  /** Average stock / target stock across the goods the stall carries. */
+  stockCover: number
+  /** Cash change since the start of the observed window. */
+  delta: number
+  open: boolean
+  bankrupt: boolean
+}
+
+export interface RiskChartOptions {
+  width?: number
+  height?: number
+  ariaLabel?: string
+  emptyText?: string
+  valueFormat?: (value: number) => string
+}
+
+/**
+ * Liquidity x stock-cover map. Bubble size is the absolute per-stall cash
+ * change, so one chart carries both risk and cash attribution.
+ */
+export function renderRiskScatter(points: RiskPoint[], options: RiskChartOptions = {}): string {
+  const width = options.width ?? 560
+  const height = options.height ?? 330
+  const pad = { top: 34, right: 30, bottom: 48, left: 58 }
+  const plotLeft = pad.left
+  const plotRight = width - pad.right
+  const plotW = Math.max(10, plotRight - plotLeft)
+  const plotH = Math.max(10, height - pad.top - pad.bottom)
+  const plotBottom = pad.top + plotH
+  const formatValue = options.valueFormat ?? compact
+
+  if (points.length === 0) {
+    return `<svg class="chart-svg risk-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+      options.ariaLabel ?? 'Stall risk map',
+    )}">
+      <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="12" fill="rgba(255,255,255,0.014)"/>
+      <text x="${width / 2}" y="${height / 2}" fill="#77849a" font-size="13" text-anchor="middle">${esc(
+        options.emptyText ?? 'Stall risk appears when the market has closed a day.',
+      )}</text>
+    </svg>`
+  }
+
+  const rawXMax = Math.max(1.5, ...points.map(point => Math.max(0, point.liquidity) * 1.12))
+  const xMax = Math.max(1.5, Math.min(7, Math.ceil(rawXMax * 2) / 2))
+  const rawYMax = Math.max(1.2, ...points.map(point => Math.max(0, point.stockCover) * 1.12))
+  const yMax = Math.max(1.2, Math.min(3.5, Math.ceil(rawYMax * 2) / 2))
+  const xTicks = xMax <= 2 ? 4 : 5
+  const yTicks = yMax <= 1.5 ? 3 : 4
+  const scaleX = (value: number): number =>
+    plotLeft + (clamp(value, 0, xMax) / xMax) * plotW
+  const scaleY = (value: number): number =>
+    pad.top + plotH - (clamp(value, 0, yMax) / yMax) * plotH
+  const maxDelta = Math.max(1, ...points.map(point => Math.abs(point.delta)))
+
+  let grid = ''
+  for (let index = 0; index <= xTicks; index += 1) {
+    const value = (xMax * index) / xTicks
+    const x = scaleX(value)
+    grid += `<line x1="${x.toFixed(1)}" y1="${pad.top}" x2="${x.toFixed(1)}" y2="${plotBottom}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>`
+    if (index > 0) {
+      grid += `<text class="chart-axis-label" x="${x.toFixed(1)}" y="${height - 15}" fill="#77849a" font-size="10.5" text-anchor="middle">${value.toFixed(1)}×</text>`
+    }
+  }
+  for (let index = 0; index <= yTicks; index += 1) {
+    const value = (yMax * index) / yTicks
+    const y = scaleY(value)
+    grid += `<line x1="${plotLeft}" y1="${y.toFixed(1)}" x2="${plotRight}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>`
+    grid += `<text class="chart-axis-label" x="${plotLeft - 9}" y="${(y + 4).toFixed(1)}" fill="#77849a" font-size="10.5" text-anchor="end">${Math.round(value * 100)}%</text>`
+  }
+
+  const reserveLine =
+    xMax >= 1
+      ? `<line class="risk-target-line" x1="${scaleX(1).toFixed(1)}" y1="${pad.top}" x2="${scaleX(1).toFixed(1)}" y2="${plotBottom}" stroke="rgba(234,179,94,0.42)" stroke-width="1.1" stroke-dasharray="4 6"/>
+        <text class="risk-axis-note" x="${(scaleX(1) + 7).toFixed(1)}" y="${(pad.top + 13).toFixed(1)}" fill="#b79563" font-size="9.5" text-anchor="start">reserve</text>`
+      : ''
+  const targetLine =
+    yMax >= 0.8
+      ? `<line class="risk-target-line" x1="${plotLeft}" y1="${scaleY(0.8).toFixed(1)}" x2="${plotRight}" y2="${scaleY(0.8).toFixed(1)}" stroke="rgba(118,199,154,0.36)" stroke-width="1.1" stroke-dasharray="4 6"/>
+        <text class="risk-axis-note" x="${(plotRight - 4).toFixed(1)}" y="${(scaleY(0.8) - 6).toFixed(1)}" fill="#82b59a" font-size="9.5" text-anchor="end">target stock</text>`
+      : ''
+
+  interface BubblePlacement {
+    index: number
+    x: number
+    y: number
+    radius: number
+    tone: string
+    color: string
+    labelX: number
+    labelY: number
+    anchor: 'start' | 'middle' | 'end'
+    leader: boolean
+  }
+
+  // Place the small number badges around overlapping bubbles. The scatter
+  // position stays exact; only the label gets a leader line when needed.
+  const placements: BubblePlacement[] = []
+  const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = []
+  for (const [index, point] of points.entries()) {
+    const x = scaleX(point.liquidity)
+    const y = scaleY(point.stockCover)
+    const radius = 5 + Math.sqrt(Math.abs(point.delta) / maxDelta) * 10
+    const tone =
+      point.bankrupt || !point.open
+        ? 'closed'
+        : point.delta > 0.5
+          ? 'up'
+          : point.delta < -0.5
+            ? 'down'
+            : 'flat'
+    const color =
+      tone === 'closed' ? '#8a94a6' : tone === 'up' ? '#76c79a' : tone === 'down' ? '#e07a6b' : '#eab35e'
+    const candidates: Array<{ x: number; y: number; anchor: 'start' | 'middle' | 'end' }> = [
+      { x, y: y - radius - 8, anchor: 'middle' },
+      { x: x + radius + 9, y: y + 3, anchor: 'start' },
+      { x: x - radius - 9, y: y + 3, anchor: 'end' },
+      { x, y: y + radius + 12, anchor: 'middle' },
+    ]
+    for (let step = 1; step <= 4; step += 1) {
+      candidates.push({ x, y: y - radius - 8 - step * 12, anchor: 'middle' })
+      candidates.push({ x, y: y + radius + 12 + step * 12, anchor: 'middle' })
+    }
+    let choice = candidates[0]
+    for (const candidate of candidates) {
+      const width = 9
+      const height = 10
+      const left =
+        candidate.anchor === 'middle'
+          ? candidate.x - width / 2
+          : candidate.anchor === 'start'
+            ? candidate.x
+            : candidate.x - width
+      const right = left + width
+      const top = candidate.y - height / 2
+      const bottom = top + height
+      const outside =
+        left < plotLeft + 1 || right > plotRight - 1 || top < pad.top + 1 || bottom > plotBottom - 1
+      const overlaps = occupied.some(
+        rect => left < rect.right + 2 && right > rect.left - 2 && top < rect.bottom + 1 && bottom > rect.top - 1,
+      )
+      if (!outside && !overlaps) {
+        choice = candidate
+        break
+      }
+    }
+    const badgeWidth = 9
+    const badgeHeight = 10
+    const left =
+      choice.anchor === 'middle'
+        ? choice.x - badgeWidth / 2
+        : choice.anchor === 'start'
+          ? choice.x
+          : choice.x - badgeWidth
+    occupied.push({ left, right: left + badgeWidth, top: choice.y - badgeHeight / 2, bottom: choice.y + badgeHeight / 2 })
+    placements.push({
+      index,
+      x,
+      y,
+      radius,
+      tone,
+      color,
+      labelX: choice.x,
+      labelY: choice.y,
+      anchor: choice.anchor,
+      leader: Math.hypot(choice.x - x, choice.y - y) > radius + 7,
+    })
+  }
+
+  const bubbles = placements
+    .map(placement => {
+      const point = points[placement.index]
+      const change = `${point.delta > 0.5 ? '+' : point.delta < -0.5 ? '−' : ''}${formatValue(Math.abs(point.delta))}`
+      const leader = placement.leader
+        ? `<line class="risk-label-leader" x1="${placement.x.toFixed(1)}" y1="${placement.y.toFixed(
+            1,
+          )}" x2="${placement.labelX.toFixed(1)}" y2="${placement.labelY.toFixed(
+            1,
+          )}" stroke="${placement.color}" stroke-width="0.8" opacity="0.46"/>`
+        : ''
+      return `<g class="risk-point risk-${placement.tone}">
+        <title>${esc(
+          `${point.label}: ${formatValue(point.cash)} cash · ${formatValue(point.reserve)} reserve (${point.liquidity.toFixed(
+            2,
+          )}×) · ${Math.round(point.stockCover * 100)}% stock cover · cash change ${change}${point.bankrupt ? ' · closed' : ''}`,
+        )}</title>
+        ${leader}
+        <circle cx="${placement.x.toFixed(1)}" cy="${placement.y.toFixed(1)}" r="${placement.radius.toFixed(
+          1,
+        )}" fill="${placement.color}" fill-opacity="0.42" stroke="${placement.color}" stroke-width="1.5"/>
+        <circle cx="${placement.x.toFixed(1)}" cy="${placement.y.toFixed(1)}" r="2.2" fill="${placement.color}"/>
+        <text class="risk-point-label" x="${placement.labelX.toFixed(1)}" y="${(placement.labelY + 3).toFixed(
+          1,
+        )}" fill="#d7dfeb" font-size="8.5" font-weight="700" text-anchor="${placement.anchor}">${placement.index + 1}</text>
+      </g>`
+    })
+    .join('')
+
+  return `<svg class="chart-svg risk-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+    options.ariaLabel ?? 'Stall liquidity and stock risk map',
+  )}">
+    <title>${esc(options.ariaLabel ?? 'Stall liquidity and stock risk map')}</title>
+    <desc>${esc(
+      'Horizontal axis: cash divided by reserve. Vertical axis: stock against target. Bubble size is the absolute cash change; green gained cash, red lost it.',
+    )}</desc>
+    <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="12" fill="rgba(255,255,255,0.012)"/>
+    ${grid}${reserveLine}${targetLine}${bubbles}
+    <text class="chart-axis-label" x="${(plotLeft + plotW / 2).toFixed(1)}" y="${height - 2}" fill="#77849a" font-size="10" text-anchor="middle">cash ÷ reserve</text>
+    <text class="chart-axis-label" x="12" y="${(pad.top + plotH / 2).toFixed(1)}" fill="#77849a" font-size="10" text-anchor="middle" transform="rotate(-90 12 ${(pad.top + plotH / 2).toFixed(1)})">stock cover</text>
+  </svg>`
+}
+
+/* ------------------------------------------------------------------ cash attribution */
+
+export interface CashChangePoint {
+  id: string
+  label: string
+  start: number
+  end: number
+  delta: number
+  open: boolean
+  bankrupt: boolean
+}
+
+export interface CashChangeOptions {
+  width?: number
+  height?: number
+  ariaLabel?: string
+  emptyText?: string
+  valueFormat?: (value: number) => string
+  windowLabel?: string
+}
+
+/** Horizontal diverging bars: one stall's cash change since the window start. */
+export function renderCashChangeChart(
+  points: CashChangePoint[],
+  options: CashChangeOptions = {},
+): string {
+  const width = options.width ?? 560
+  const height = options.height ?? 300
+  const pad = { top: 24, right: 56, bottom: 22, left: 104 }
+  const plotLeft = pad.left
+  const plotRight = width - pad.right
+  const plotW = Math.max(10, plotRight - plotLeft)
+  const plotH = Math.max(10, height - pad.top - pad.bottom)
+  const formatValue = options.valueFormat ?? compact
+  const label = options.windowLabel ?? 'this window'
+
+  if (points.length === 0) {
+    return `<svg class="chart-svg cash-change-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+      options.ariaLabel ?? 'Per-stall cash change',
+    )}">
+      <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.014)"/>
+      <text x="${width / 2}" y="${height / 2}" fill="#77849a" font-size="13" text-anchor="middle">${esc(
+        options.emptyText ?? 'Cash changes appear when a day closes.',
+      )}</text>
+    </svg>`
+  }
+
+  const maxAbs = Math.max(1, ...points.map(point => Math.abs(point.delta)))
+  const zeroX = plotLeft + plotW / 2
+  const halfW = plotW * 0.44
+  const rowH = plotH / points.length
+  const barH = Math.min(18, rowH * 0.58)
+  const rows = points
+    .map((point, index) => {
+      const y = pad.top + rowH * (index + 0.5)
+      const length = (Math.abs(point.delta) / maxAbs) * halfW
+      const positive = point.delta >= 0
+      const x = positive ? zeroX : zeroX - length
+      const tone = point.bankrupt || !point.open ? 'closed' : point.delta > 0.5 ? 'up' : point.delta < -0.5 ? 'down' : 'flat'
+      const color = tone === 'closed' ? '#8a94a6' : tone === 'up' ? '#76c79a' : tone === 'down' ? '#e07a6b' : '#eab35e'
+      const change = `${point.delta > 0.5 ? '+' : point.delta < -0.5 ? '−' : ''}${formatValue(Math.abs(point.delta))}`
+      return `<g class="cash-change-row">
+        <title>${esc(
+          `${point.label}: ${formatValue(point.start)} at the start of ${label} → ${formatValue(point.end)} at the end (${change})${point.bankrupt ? ' · closed' : ''}`,
+        )}</title>
+        <text class="cash-change-label" x="${plotLeft - 10}" y="${(y + 4).toFixed(1)}" fill="#c4ccd9" font-size="11" text-anchor="end">${esc(
+          point.label,
+        )}</text>
+        <rect x="${plotLeft}" y="${(y - barH / 2).toFixed(1)}" width="${plotW}" height="${barH.toFixed(1)}" rx="${(barH / 2).toFixed(1)}" fill="rgba(255,255,255,0.028)"/>
+        <rect x="${x.toFixed(1)}" y="${(y - barH / 2).toFixed(1)}" width="${Math.max(1, length).toFixed(1)}" height="${barH.toFixed(1)}" rx="${(barH / 2).toFixed(1)}" fill="${color}" opacity="0.8"/>
+        <text class="cash-change-value" x="${(positive ? zeroX + length + 7 : zeroX - length - 7).toFixed(1)}" y="${(y + 4).toFixed(1)}" fill="${color}" font-size="10.5" text-anchor="${positive ? 'start' : 'end'}">${esc(
+          change,
+        )}</text>
+      </g>`
+    })
+    .join('')
+
+  return `<svg class="chart-svg cash-change-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+    options.ariaLabel ?? 'Per-stall cash change',
+  )}">
+    <title>${esc(options.ariaLabel ?? 'Per-stall cash change')}</title>
+    <desc>${esc(
+      `Horizontal bars show each stall's cash change from the start of ${label}; green gained, red lost, grey closed.`,
+    )}</desc>
+    <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.012)"/>
+    <line x1="${zeroX.toFixed(1)}" y1="${pad.top}" x2="${zeroX.toFixed(1)}" y2="${pad.top + plotH}" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+    ${rows}
+    <text class="chart-axis-label" x="${zeroX.toFixed(1)}" y="${height - 4}" fill="#77849a" font-size="9.5" text-anchor="middle">no change</text>
   </svg>`
 }
 

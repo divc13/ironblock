@@ -106,6 +106,7 @@
                 Each line starts at its first recorded ask. Hover or focus a day for exact prices.
               </p>
             </div>
+            <button class="twin-toggle" type="button" data-twin="price" data-twin-chart="price-chart-wrap" aria-pressed="false" aria-controls="price-table">Table</button>
           </header>
           <div class="price-legend" id="price-legend" aria-label="Price chart items"></div>
           <div class="price-chart-wrap" id="price-chart-wrap">
@@ -118,6 +119,32 @@
           <p class="chart-source" id="price-source">
             Recorded merchant quotes only. Dashed spans mean no quote was sampled that day.
           </p>
+          <div class="twin-panel" id="price-table" hidden></div>
+        </section>
+
+        <section class="card price-card price-history-card" aria-labelledby="price-history-title">
+          <header class="card-head price-head">
+            <div>
+              <p class="section-kicker">Every good, every day</p>
+              <h2 id="price-history-title">Price paths</h2>
+              <p class="card-sub" id="price-history-sub">
+                All goods on one common baseline. Choose a town-wide median or a single stall.
+              </p>
+            </div>
+            <div class="card-tools">
+              <label class="market-picker" for="price-history-market">Market
+                <select id="price-history-market"></select>
+              </label>
+              <button class="twin-toggle" type="button" data-twin="price-history" data-twin-chart="price-history-chart-wrap" aria-pressed="false" aria-controls="price-history-table">Table</button>
+            </div>
+          </header>
+          <div class="price-legend price-history-legend" id="price-history-legend" aria-label="Price path items"></div>
+          <div class="price-chart-wrap" id="price-history-chart-wrap">
+            <div id="price-history-chart" class="price-chart"></div>
+          </div>
+          <p class="chart-caption" id="price-history-caption">The full item-by-item paths appear when the preview finishes.</p>
+          <p class="chart-source" id="price-history-source">Every recorded ask, indexed to its first close. Markers show shocks, closures and reopens.</p>
+          <div class="twin-panel" id="price-history-table" hidden></div>
         </section>
 
         <div class="insight-grid">
@@ -128,6 +155,7 @@
                 <h2 id="money-title">Cash in town</h2>
                 <p class="card-sub">Merchant tills and traveler wallets, day by day.</p>
               </div>
+              <button class="twin-toggle" type="button" data-twin="money" data-twin-chart="money-chart" aria-pressed="false" aria-controls="money-table">Table</button>
             </header>
             <div class="chart-legend" aria-hidden="true">
               <span class="legend-swatch merchant"></span>Merchant tills
@@ -136,6 +164,7 @@
             </div>
             <div class="money-chart" id="money-chart" aria-live="off"></div>
             <p class="chart-caption" id="money-caption">Waiting for the town's cash history…</p>
+            <div class="twin-panel" id="money-table" hidden></div>
           </section>
 
           <section class="card flow-card" aria-labelledby="flow-title">
@@ -145,6 +174,7 @@
                 <h2 id="flow-title">Money in and out</h2>
                 <p class="card-sub">External taps and drains. Trades move cash inside town; they do not create it.</p>
               </div>
+              <button class="twin-toggle" type="button" data-twin="flow" data-twin-chart="flow-chart" aria-pressed="false" aria-controls="flow-table">Table</button>
             </header>
             <div class="chart-legend" aria-hidden="true">
               <span class="legend-swatch inflow"></span>Inflow
@@ -153,6 +183,7 @@
             </div>
             <div class="flow-chart" id="flow-chart" aria-live="off"></div>
             <p class="chart-caption" id="flow-caption">Waiting for the first closed day…</p>
+            <div class="twin-panel" id="flow-table" hidden></div>
           </section>
         </div>
 
@@ -174,6 +205,37 @@
           <p class="chart-caption" id="heatmap-caption">Waiting for merchant quotes…</p>
         </section>
 
+        <div class="risk-grid">
+          <section class="card risk-card" aria-labelledby="risk-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">Cash cushion × stock cushion</p>
+                <h2 id="risk-title">Stall risk</h2>
+                <p class="card-sub" id="risk-sub">Liquidity against stock cover. Bubble size is the cash change; green gained, red lost.</p>
+              </div>
+              <button class="twin-toggle" type="button" data-twin="risk" data-twin-chart="risk-chart" aria-pressed="false" aria-controls="risk-table">Table</button>
+            </header>
+            <div class="risk-chart" id="risk-chart"></div>
+            <div class="risk-legend" id="risk-legend" aria-label="Stall key"></div>
+            <p class="chart-caption" id="risk-caption">The final risk map appears when the preview finishes.</p>
+            <div class="twin-panel" id="risk-table" hidden></div>
+          </section>
+
+          <section class="card cash-card" aria-labelledby="cash-change-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">Per-stall attribution</p>
+                <h2 id="cash-change-title">Who moved the tills</h2>
+                <p class="card-sub" id="cash-change-sub">Each stall's cash change from the start of the window, with the exact start and end.</p>
+              </div>
+              <button class="twin-toggle" type="button" data-twin="cash-change" data-twin-chart="cash-change-chart" aria-pressed="false" aria-controls="cash-change-table">Table</button>
+            </header>
+            <div class="cash-change-chart" id="cash-change-chart"></div>
+            <p class="chart-caption" id="cash-change-caption">The per-stall cash attribution appears when the preview finishes.</p>
+            <div class="twin-panel" id="cash-change-table" hidden></div>
+          </section>
+        </div>
+
         <div class="support-grid">
           <section class="card wealth-card" aria-labelledby="wealth-title">
             <header class="card-head">
@@ -182,9 +244,11 @@
                 <h2 id="wealth-title">Merchant cash</h2>
                 <p class="card-sub" id="wealth-sub">Cash in each till · colour shows change from week open.</p>
               </div>
+              <button class="twin-toggle" type="button" data-twin="wealth" data-twin-chart="wealth-chart" aria-pressed="false" aria-controls="wealth-table">Table</button>
             </header>
             <div class="wealth-chart" id="wealth-chart" aria-live="off"></div>
             <p class="chart-caption" id="wealth-caption">Waiting for the merchant tills…</p>
+            <div class="twin-panel" id="wealth-table" hidden></div>
           </section>
 
           <section class="card volume-card" aria-labelledby="volume-title">
@@ -194,9 +258,11 @@
                 <h2 id="volume-title">Trade volume</h2>
                 <p class="card-sub" id="volume-sub">Units traded each day; today is in progress.</p>
               </div>
+              <button class="twin-toggle" type="button" data-twin="volume" data-twin-chart="volume-chart" aria-pressed="false" aria-controls="volume-table">Table</button>
             </header>
             <div class="volume-chart" id="volume-chart"></div>
             <p class="chart-caption" id="volume-caption">Waiting for the first day to close…</p>
+            <div class="twin-panel" id="volume-table" hidden></div>
           </section>
 
           <section class="card activity-card" aria-labelledby="activity-title">

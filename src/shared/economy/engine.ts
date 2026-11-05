@@ -35,6 +35,7 @@ import {
   type EconomyFastForwardResult,
   type EconomyStats,
   type EconomyWorldState,
+  type FastForwardPriceSnapshot,
   type FastForwardSeriesPoint,
   type GatherActionData,
   type InvestActionData,
@@ -1633,12 +1634,25 @@ export class EconomyEngine {
     const beforeCash = totalMerchantCash(this.state)
     const beforeStock = totalStockOf(this.state)
     const beforePlayerCash = totalPlayerCash(this.state)
+    const priceHistory: FastForwardPriceSnapshot[] = []
+    let lastSummaryDay = this.state.summaries.length > 0
+      ? this.state.summaries[this.state.summaries.length - 1].day
+      : this.state.day - 1
 
     let elapsed = 0
     let executedSteps = 0
     while (elapsed < totalSeconds - 1e-9) {
       const step = Math.min(this.config.fastForward.stepSeconds, totalSeconds - elapsed)
       this.advanceStep(step, [])
+      const latestSummary = this.state.summaries[this.state.summaries.length - 1]
+      if (latestSummary && latestSummary.day !== lastSummaryDay) {
+        priceHistory.push({
+          day: latestSummary.day,
+          endedAt: latestSummary.endedAt,
+          prices: this.capturePriceSnapshot(),
+        })
+        lastSummaryDay = latestSummary.day
+      }
       elapsed += step
       executedSteps += 1
     }
@@ -1718,6 +1732,7 @@ export class EconomyEngine {
       seed: this.state.rngSeed,
       summaries,
       series,
+      priceHistory: cloneJson(priceHistory),
       events: cloneJson(events),
       eventCount: this.state.sequence - startSequence,
       finalSequence: this.state.sequence,
@@ -1742,6 +1757,7 @@ export class EconomyEngine {
       seed: this.state.rngSeed,
       summaries: [],
       series: [],
+      priceHistory: [],
       events: [],
       eventCount: 0,
       finalSequence: this.state.sequence,
