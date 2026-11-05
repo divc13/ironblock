@@ -154,8 +154,9 @@ JSON unless noted. Public data only (see privacy below).
   `time` so callers can verify this.
 - Response: `{ ok, mode: 'deterministic-clone', days, startDay, endDay,
   fromTime, toTime, seed, finalSequence, series, summaries, events,
-  annotations, recap, timing: { cloneMs, simulateMs, totalMs, steps, days,
-  eventCount }, live }`.
+  annotations, recap, finalMerchants, timing: { cloneMs, simulateMs, totalMs,
+  steps, days, eventCount }, live }`. `finalMerchants` is the sanitized
+  week-end stall state used by the dashboard's final price and stock heatmaps.
 - `annotations` are built server-side from real engine events (caravan
   arrivals, bankruptcies, reopens, distributions, recoveries, rent aggregates,
   day close) with causal-chain strings; the dashboard uses them for the ~60 s
@@ -200,9 +201,11 @@ public by design. `POST /fast-forward` responses apply the same sanitizer.
   charts.
 - Sections: top bar (status, day, clock, connection + demo badge), market tape,
   merchant cards, economy health, event stream with filters and keyboard-usable
-  detail view, chart panels (cash, prices, volume), fast-forward panel with
-  annotated ~60 s playback (pause/step/skip), newspaper recap, on-chain proof
-  panel.
+  detail view, chart panels (cash, prices, volume, town cash split, external
+  flows, price/stock market map), fast-forward panel with annotated ~60 s
+  playback (pause/step/skip), newspaper recap, on-chain proof panel. The
+  preview is explicitly labelled **Preview only · not saved**; the week runs on
+  a throwaway clone, never advances the live town, and is never persisted.
 - Accessibility: focus-visible outlines, keyboard shortcuts, ARIA live/status
   regions, contrast-checked palette, `prefers-reduced-motion` handling (charts
   and playback respect it). Layouts verified at 1280×720 and 1920×1080.

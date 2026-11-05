@@ -315,6 +315,8 @@ export interface FastForwardClonePayload {
     sinkTotal: number
   }[]
   summaries: PublicSummary[]
+  /** Final sanitized merchant state at the preview's last day close. */
+  finalMerchants: PublicMerchant[]
   events: SequencedMarketEvent[]
   annotations: FastForwardAnnotation[]
   recap: Recap

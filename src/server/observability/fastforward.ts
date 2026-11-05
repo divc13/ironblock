@@ -125,6 +125,7 @@ export function runFastForwardClone(
     finalSequence: result.finalSequence,
     series: result.series.map(point => ({ ...point })),
     summaries: result.summaries.map(sanitizeSummary),
+    finalMerchants: finalPublicSnapshot.merchants,
     events,
     annotations,
     recap: buildRecap(finalPublicSnapshot, config),

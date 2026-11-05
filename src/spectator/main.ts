@@ -4,6 +4,7 @@ import type {
   FastForwardAnnotation,
   FastForwardClonePayload,
   ProofPayload,
+  PublicMerchant,
   PublicSnapshot,
   Recap,
   SequencedMarketEvent,
@@ -15,9 +16,18 @@ import type { EconomyConfig, ItemId, MarketEventType, MerchantId } from '../shar
 import { createFeed, type MarketFeed, type MarketStreamMessage } from './api'
 import { FastForwardPlayback, type PlaybackItem, type PlaybackProgress } from './playback'
 import {
+  renderFlowChart as renderFlowSvg,
+  renderHeatmap,
+  renderMoneyFlowChart as renderMoneyFlowSvg,
   renderPriceChart as renderPriceSvg,
   renderSparkline,
   renderVolumeChart as renderVolumeSvg,
+  type FlowPoint,
+  type HeatmapCell,
+  type HeatmapColumn,
+  type HeatmapRow,
+  type HeatmapTone,
+  type MoneyFlowPoint,
   type PriceSeries,
   type Point,
 } from './charts'
@@ -76,7 +86,9 @@ interface WealthRowView {
   id: MerchantId
   name: string
   cash: number
+  reserve: number
   delta: number
+  history: number[]
   open: boolean
   bankrupt: boolean
 }
@@ -88,9 +100,42 @@ interface VolumePointView {
 }
 
 interface VolumeView {
+  mode: 'live' | 'week'
   points: VolumePointView[]
   ariaLabel: string
   emptyText: string
+}
+
+interface MoneyFlowView {
+  mode: 'live' | 'week'
+  points: MoneyFlowPoint[]
+  ariaLabel: string
+  emptyText: string
+}
+
+interface FlowView {
+  mode: 'live' | 'week'
+  points: FlowPoint[]
+  ariaLabel: string
+  emptyText: string
+}
+
+type HeatmapMode = 'price' | 'usual' | 'stock'
+
+interface HeatmapBoard {
+  columns: HeatmapColumn[]
+  rows: HeatmapRow[]
+  sub: string
+  caption: string
+  ariaLabel: string
+  emptyText: string
+}
+
+interface HeatmapView {
+  mode: 'live' | 'week'
+  price: HeatmapBoard
+  usual: HeatmapBoard
+  stock: HeatmapBoard
 }
 
 const PRICE_COLORS = ['#eab35e', '#7fb6e8', '#e98a7f', '#9bcf9f', '#c5a3e8']
@@ -102,6 +147,13 @@ let activePriceReveal = 1
 let activeCaptionKey = ''
 let activeVolumeView: VolumeView | null = null
 let activeVolumeCount = -1
+let activeMoneyFlowView: MoneyFlowView | null = null
+let activeMoneyFlowReveal = -1
+let activeFlowView: FlowView | null = null
+let activeFlowReveal = -1
+let activeHeatmapView: HeatmapView | null = null
+let activeHeatmapKey = ''
+let heatmapMode: HeatmapMode = 'price'
 
 interface MerchantMirror {
   cash?: number
@@ -122,6 +174,9 @@ interface WeekRun {
   startMerchantCash: Map<MerchantId, number>
   priceView: PriceView
   volumeView: VolumeView
+  moneyFlowView: MoneyFlowView
+  flowView: FlowView
+  heatmapView: HeatmapView
   wealthRows: WealthRowView[]
   reopenCount: number
   mirror: Map<MerchantId, MerchantMirror>
@@ -346,6 +401,13 @@ function wireStaticEvents(): void {
     }
   })
 
+  $('heatmap-toggle').addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-heatmap]')
+    if (!button) return
+    const next = button.dataset.heatmap
+    nextHeatmapMode(next === 'stock' ? 'stock' : next === 'usual' ? 'usual' : 'price')
+  })
+
   const priceWrap = $('price-chart-wrap')
   priceWrap.addEventListener('pointermove', event => {
     const band = (event.target as Element).closest<Element>('[data-price-x]')
@@ -386,6 +448,8 @@ function wireStaticEvents(): void {
     resizeFrame = requestAnimationFrame(() => {
       if (activePriceView) renderPriceCard(activePriceView, activePriceReveal, true)
       if (activeVolumeView) renderVolumeCard(activeVolumeView, activeVolumeCount, true)
+      if (activeMoneyFlowView) renderMoneyFlowCard(activeMoneyFlowView, activeMoneyFlowReveal, true)
+      if (activeFlowView) renderFlowCard(activeFlowView, activeFlowReveal, true)
     })
   })
 }
@@ -415,6 +479,27 @@ async function boot(): Promise<void> {
   renderPriceCard(emptyPriceView('live'), 1, true)
   renderWealthCard([], 1, 'live')
   renderVolumeCard(emptyVolumeView('live'), 0)
+  renderMoneyFlowCard(
+    {
+      mode: 'live',
+      points: [],
+      ariaLabel: 'Town cash split with no recorded days yet.',
+      emptyText: 'Waiting for the town’s cash history…',
+    },
+    0,
+    true,
+  )
+  renderFlowCard(
+    {
+      mode: 'live',
+      points: [],
+      ariaLabel: 'External cash flows with no recorded days yet.',
+      emptyText: 'Waiting for the first closed day…',
+    },
+    0,
+    true,
+  )
+  renderHeatmapPlaceholder('Waiting for merchant quotes…', true)
 
   try {
     const created = await createFeed()
@@ -485,15 +570,23 @@ function renderModeBadge(): void {
   if (!feed) return
   const badge = $('mode-badge')
   const live = feed.mode === 'live'
-  badge.classList.toggle('live', live)
-  badge.classList.toggle('demo', !live)
-  $('mode-text').textContent = live ? 'LIVE' : 'DEMO'
-  badge.title = live
-    ? 'Connected to the running economy service'
-    : demoNotice ?? 'Deterministic local replay — no live service'
+  const previewing = viewMode === 'week'
+  badge.classList.toggle('live', live && !previewing)
+  badge.classList.toggle('demo', !live && !previewing)
+  badge.classList.toggle('preview', previewing)
+  $('mode-text').textContent = previewing ? 'PREVIEW' : live ? 'LIVE' : 'DEMO'
+  badge.title = previewing
+    ? 'Simulated 7-day preview · live town unchanged, result not saved'
+    : live
+      ? 'Connected to the running economy service'
+      : demoNotice ?? 'Deterministic local replay — no live service'
   badge.setAttribute(
     'aria-label',
-    live ? 'Live: connected to the running economy service' : 'Demo replay: deterministic local simulation, not a live service',
+    previewing
+      ? 'Preview: simulated seven-day forecast, live town unchanged and result not saved'
+      : live
+        ? 'Live: connected to the running economy service'
+        : 'Demo replay: deterministic local simulation, not a live service',
   )
 
   const note = $('connection-note')
@@ -503,7 +596,7 @@ function renderModeBadge(): void {
   } else {
     note.hidden = true
   }
-  $('footer-mode').textContent = live ? 'Live feed' : 'Local demo replay'
+  $('footer-mode').textContent = previewing ? 'Simulated preview' : live ? 'Live feed' : 'Local demo replay'
 }
 
 function renderClock(day: number, preview = false): void {
@@ -511,7 +604,7 @@ function renderClock(day: number, preview = false): void {
   chip.textContent = `Day ${day}`
   chip.classList.toggle('is-preview', preview)
   chip.title = preview
-    ? `Simulated preview · town day ${day} — the live town is unchanged`
+    ? `Simulated preview · town day ${day} — live town unchanged, result not saved`
     : 'Current day in the live town'
 }
 
@@ -546,6 +639,12 @@ function renderLiveAll(): void {
   renderWealthCard(buildLiveWealthRows(current), 1, 'live')
   const volume = buildLiveVolumeView(current)
   renderVolumeCard(volume, volume.points.length)
+  const moneyFlow = buildLiveMoneyFlowView(current)
+  renderMoneyFlowCard(moneyFlow, moneyFlow.points.length)
+  const flows = buildLiveFlowView(current)
+  renderFlowCard(flows, flows.points.length)
+  renderHeatmapCard(buildLiveHeatmapView(current), true)
+  setActivityCopy('live')
   renderStoryFeed(buildLiveStory())
   renderBotActivity(eventBuffer)
   renderMerchantCards()
@@ -747,7 +846,7 @@ function emptyPriceView(mode: 'live' | 'week'): PriceView {
     ['Open', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'],
     [],
     mode === 'live'
-      ? 'Run the 7-day week to draw the town’s price lines.'
+      ? 'Run the 7-day preview to draw the town’s price lines.'
       : 'No item quotes were recorded in this week.',
   )
 }
@@ -819,7 +918,7 @@ function buildLivePriceView(current: PublicSnapshot): PriceView {
     'live',
     labels,
     candidates,
-    'Run the 7-day week to draw a full week of prices.',
+    'Run the 7-day preview to draw a full week of prices.',
   )
 }
 
@@ -830,6 +929,7 @@ function buildWeekVolumeView(payload: FastForwardClonePayload): VolumeView {
     note: point.bankruptcies > 0 ? `${point.bankruptcies} stall${point.bankruptcies === 1 ? '' : 's'} closed` : undefined,
   }))
   return {
+    mode: 'week',
     points,
     ariaLabel: 'Daily trade volume for the simulated week.',
     emptyText: 'No daily trade volume was recorded.',
@@ -855,33 +955,489 @@ function buildLiveVolumeView(current: PublicSnapshot): VolumeView {
     })
   }
   return {
+    mode: 'live',
     points,
     ariaLabel:
       points.length > 0
         ? `Daily trade volume for ${points.map(point => point.label).join(', ')}.`
         : 'Daily trade volume with no recorded days yet.',
-    emptyText: summaries.length === 0 ? 'Run the 7-day week to fill the trade bars.' : 'No trades yet today.',
+    emptyText: summaries.length === 0 ? 'Run the 7-day preview to fill the trade bars.' : 'No trades yet today.',
   }
 }
 
 function emptyVolumeView(mode: 'live' | 'week'): VolumeView {
   return {
+    mode,
     points: [],
     ariaLabel: 'Daily trade volume with no recorded days yet.',
-    emptyText: mode === 'live' ? 'Run the 7-day week to fill the trade bars.' : 'No daily trade volume was recorded.',
+    emptyText: mode === 'live' ? 'Run the 7-day preview to fill the trade bars.' : 'No daily trade volume was recorded.',
   }
+}
+
+/* ------------------------------------------------------------------ cash + flow views */
+
+type FlowTotals = Pick<PublicSnapshot['daily'], 'caravan' | 'sinks' | 'orders' | 'investments'>
+
+function moneyFlowPoint(label: string, merchant: number, traveler: number): MoneyFlowPoint {
+  return {
+    label,
+    merchant: Math.max(0, merchant),
+    traveler: Math.max(0, traveler),
+  }
+}
+
+function flowPoint(label: string, totals: FlowTotals): FlowPoint {
+  const orders = Math.max(0, totals.orders.payouts)
+  const caravanOut = Math.max(0, totals.caravan.cashOut)
+  const investments = Math.max(0, totals.investments.amount)
+  const caravanIn = Math.max(0, totals.caravan.cashIn)
+  const sinks = Math.max(0, totals.sinks.total)
+  const inflow = orders + caravanOut + investments
+  const outflow = caravanIn + sinks
+  return {
+    label,
+    inflow,
+    outflow,
+    net: inflow - outflow,
+    orders,
+    caravanIn,
+    caravanOut,
+    investments,
+    sinks,
+  }
+}
+
+function buildLiveMoneyFlowView(current: PublicSnapshot): MoneyFlowView {
+  const points = current.summaries
+    .slice(-7)
+    .map(summary => moneyFlowPoint(`D${summary.day}`, summary.totalMerchantCash, summary.totalPlayerCash))
+  points.push(
+    moneyFlowPoint(
+      'Now',
+      sum(current.merchants.map(merchant => merchant.cash)),
+      current.travelers.totalCash,
+    ),
+  )
+  return {
+    mode: 'live',
+    points,
+    ariaLabel: `Town cash split for ${points.map(point => point.label).join(', ')}. Stacked bars show merchant tills and traveler wallets.`,
+    emptyText: 'Cash history appears as the town records days.',
+  }
+}
+
+function buildWeekMoneyFlowView(payload: FastForwardClonePayload): MoneyFlowView {
+  const points = weekSeries(payload).map((point, index) =>
+    moneyFlowPoint(`D${index + 1}`, point.totalMerchantCash, point.totalPlayerCash),
+  )
+  return {
+    mode: 'week',
+    points,
+    ariaLabel: 'Simulated town cash split for the seven-day preview. Stacked bars show merchant tills and traveler wallets.',
+    emptyText: 'No cash history was recorded in this preview.',
+  }
+}
+
+function buildLiveFlowView(current: PublicSnapshot): FlowView {
+  const points = current.summaries
+    .slice(-7)
+    .map(summary => flowPoint(`D${summary.day}`, summary))
+  points.push(flowPoint('Today', current.daily))
+  return {
+    mode: 'live',
+    points,
+    ariaLabel: `External cash inflows and drains for ${points.map(point => point.label).join(', ')}.`,
+    emptyText: 'External cash flows appear as days close.',
+  }
+}
+
+function buildWeekFlowView(payload: FastForwardClonePayload): FlowView {
+  const points = (payload.summaries ?? []).map((summary, index) => flowPoint(`D${index + 1}`, summary))
+  return {
+    mode: 'week',
+    points,
+    ariaLabel: 'Simulated external cash inflows and drains for the seven-day preview.',
+    emptyText: 'No daily cash flows were recorded in this preview.',
+  }
+}
+
+/* ------------------------------------------------------------------ market map */
+
+type BaselineLookup = (merchant: PublicMerchant, item: ItemId) => number | null
+
+function heatmapColumns(merchants: PublicMerchant[]): HeatmapColumn[] {
+  const seen = new Set<string>()
+  for (const merchant of merchants) {
+    for (const itemId of Object.keys(merchant.askPrices)) seen.add(itemId)
+    for (const itemId of Object.keys(merchant.bidPrices)) seen.add(itemId)
+    for (const itemId of Object.keys(merchant.targetStock)) seen.add(itemId)
+  }
+  const ordered = config ? Object.keys(config.items) : []
+  const ids = [
+    ...ordered.filter(itemId => seen.has(itemId)),
+    ...[...seen].filter(itemId => !ordered.includes(itemId)).sort(),
+  ]
+  return ids.map(itemId => ({ id: itemId, label: itemLabel(itemId) }))
+}
+
+function buildPriceHeatmapBoard(
+  merchants: PublicMerchant[],
+  columns: HeatmapColumn[],
+  baseline: BaselineLookup,
+  baselineLabel: string,
+  mode: 'live' | 'week',
+): HeatmapBoard {
+  let up = 0
+  let down = 0
+  let flat = 0
+  let compared = 0
+  let absolute = 0
+  const movers: Array<{ merchant: string; item: string; pct: number }> = []
+
+  const rows: HeatmapRow[] = merchants.map(merchant => {
+    const cells: Record<string, HeatmapCell> = {}
+    for (const column of columns) {
+      const itemId = column.id as ItemId
+      const current = merchant.askPrices[itemId] ?? merchant.bidPrices[itemId]
+      if (!Number.isFinite(current) || current <= 0) continue
+      const open = baseline(merchant, itemId)
+      if (open !== null && Number.isFinite(open) && open > 0) {
+        const pct = ((current - open) / open) * 100
+        compared += 1
+        const tone: HeatmapTone = pct > 0.5 ? 'up' : pct < -0.5 ? 'down' : 'flat'
+        if (tone === 'up') up += 1
+        else if (tone === 'down') down += 1
+        else flat += 1
+        cells[column.id] = {
+          label: signedPercent(pct),
+          title: `${merchant.displayName} · ${column.label}: ${money(current)} now vs ${money(
+            open,
+          )} ${baselineLabel} (${signedPercent(pct)})`,
+          tone,
+          strength: clamp(Math.abs(pct) / 20, 0, 1),
+        }
+        movers.push({ merchant: merchant.displayName, item: column.label, pct })
+      } else {
+        absolute += 1
+        cells[column.id] = {
+          label: money0(current),
+          title: `${merchant.displayName} · ${column.label}: ${money(current)}. No ${baselineLabel} baseline was recorded.`,
+          tone: 'flat',
+        }
+      }
+    }
+    return { id: merchant.id, label: merchant.displayName, cells }
+  })
+
+  let caption: string
+  if (compared === 0 && absolute === 0) {
+    caption = 'No merchant quotes are available yet.'
+  } else if (compared === 0) {
+    caption = `${absolute} quotes shown at absolute ask; no ${baselineLabel} baseline was recorded.`
+  } else {
+    const parts: string[] = []
+    if (up > 0) parts.push(`${up} dearer`)
+    if (down > 0) parts.push(`${down} cheaper`)
+    if (flat > 0) parts.push(`${flat} flat`)
+    caption = `${compared} quotes vs ${baselineLabel}: ${parts.join(', ')}.`
+    const biggest = movers.sort((left, right) => Math.abs(right.pct) - Math.abs(left.pct))[0]
+    if (biggest) {
+      caption += ` Biggest move: ${biggest.merchant} ${biggest.item} ${signedPercent(biggest.pct)}.`
+    }
+  }
+  if (mode === 'week' && compared + absolute > 0) {
+    caption += ' Final simulated close; the live town is unchanged.'
+  }
+
+  return {
+    columns,
+    rows,
+    sub: `${mode === 'week' ? 'Final ask' : 'Current ask'} vs ${baselineLabel}. Green is dearer, blue is cheaper.`,
+    caption,
+    ariaLabel: `Price movement heatmap for ${merchants.length} merchants across ${columns.length} goods. ${caption}`,
+    emptyText: mode === 'week' ? 'The final market map was not included in this preview.' : 'Waiting for merchant quotes…',
+  }
+}
+
+function buildStockHeatmapBoard(
+  merchants: PublicMerchant[],
+  columns: HeatmapColumn[],
+  mode: 'live' | 'week',
+): HeatmapBoard {
+  let observed = 0
+  let low = 0
+  let full = 0
+  let over = 0
+  let coverTotal = 0
+
+  const rows: HeatmapRow[] = merchants.map(merchant => {
+    const cells: Record<string, HeatmapCell> = {}
+    for (const column of columns) {
+      const itemId = column.id as ItemId
+      const stock = Math.max(0, merchant.stock[itemId] ?? 0)
+      const target = Math.max(0, merchant.targetStock[itemId] ?? 0)
+      if (stock <= 0 && target <= 0) continue
+      const coverage = target > 0 ? stock / target : null
+      if (coverage !== null) {
+        observed += 1
+        coverTotal += coverage
+        if (coverage < 0.35) low += 1
+        if (coverage >= 0.8) full += 1
+        if (coverage > 1.2) over += 1
+      }
+      const tone: HeatmapTone =
+        coverage === null ? 'flat' : coverage < 0.35 ? 'low' : coverage < 0.8 ? 'mid' : 'high'
+      cells[column.id] = {
+        label: coverage === null ? units(stock) : `${Math.round(coverage * 100)}%`,
+        title: `${merchant.displayName} · ${column.label}: ${units(stock)} of ${units(
+          target,
+        )} target stock${coverage === null ? '' : ` (${Math.round(coverage * 100)}% cover)`}.`,
+        tone,
+        strength: coverage === null ? 0.2 : coverage < 0.35 ? 1 - coverage / 0.35 : clamp(coverage, 0, 1),
+      }
+    }
+    return { id: merchant.id, label: merchant.displayName, cells }
+  })
+
+  let caption: string
+  if (observed === 0) {
+    caption = mode === 'week' ? 'No final stock was recorded in this preview.' : 'No stock observations yet.'
+  } else {
+    const average = Math.round((coverTotal / observed) * 100)
+    caption = `${observed} stall-goods tracked: ${low} below 35% of target, ${full} at 80% or better, ${over} over 120%; average cover ${average}%.`
+    if (mode === 'week') caption += ' Final simulated stock; the live town is unchanged.'
+  }
+
+  return {
+    columns,
+    rows,
+    sub:
+      mode === 'week'
+        ? "Final stock on hand vs each stall's target. Red is low, green is full."
+        : "Stock on hand vs each stall's target. Red is low, green is full.",
+    caption,
+    ariaLabel: `Stock coverage heatmap for ${merchants.length} merchants across ${columns.length} goods. ${caption}`,
+    emptyText: mode === 'week' ? 'The final stock map was not included in this preview.' : 'Waiting for merchant stock…',
+  }
+}
+
+function buildLiveHeatmapView(current: PublicSnapshot): HeatmapView {
+  const columns = heatmapColumns(current.merchants)
+  const dayOpen: BaselineLookup = (merchant, itemId) => {
+    const quote = current.daily.priceSnapshot[`${merchant.id}:${itemId}`]
+    return quote?.ask ?? quote?.bid ?? null
+  }
+  const baseValue: BaselineLookup = (_merchant, itemId) => config?.items[itemId]?.baseValue ?? null
+  return {
+    mode: 'live',
+    price: buildPriceHeatmapBoard(current.merchants, columns, dayOpen, 'day open', 'live'),
+    usual: buildPriceHeatmapBoard(current.merchants, columns, baseValue, 'base value', 'live'),
+    stock: buildStockHeatmapBoard(current.merchants, columns, 'live'),
+  }
+}
+
+function buildWeekHeatmapView(payload: FastForwardClonePayload, startSnapshot: PublicSnapshot | null): HeatmapView {
+  const finalMerchants = Array.isArray(payload.finalMerchants) ? payload.finalMerchants : []
+  const startMerchants = new Map((startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant]))
+  const columns = heatmapColumns([...finalMerchants, ...(startSnapshot?.merchants ?? [])])
+  const weekOpen: BaselineLookup = (merchant, itemId) => {
+    const start = startMerchants.get(merchant.id)
+    if (!start) return null
+    return start.askPrices[itemId] ?? start.bidPrices[itemId] ?? null
+  }
+  const baseValue: BaselineLookup = (_merchant, itemId) => config?.items[itemId]?.baseValue ?? null
+  return {
+    mode: 'week',
+    price: buildPriceHeatmapBoard(finalMerchants, columns, weekOpen, 'week open', 'week'),
+    usual: buildPriceHeatmapBoard(finalMerchants, columns, baseValue, 'base value', 'week'),
+    stock: buildStockHeatmapBoard(finalMerchants, columns, 'week'),
+  }
+}
+
+/* ------------------------------------------------------------------ cash + flow rendering */
+
+function moneyFlowChartSize(): { width: number; height: number } {
+  const width = Math.max(240, Math.round($('money-chart').clientWidth || 480))
+  return { width, height: Math.round(Math.max(200, Math.min(310, width * 0.56))) }
+}
+
+function flowChartSize(): { width: number; height: number } {
+  const width = Math.max(240, Math.round($('flow-chart').clientWidth || 480))
+  return { width, height: Math.round(Math.max(200, Math.min(310, width * 0.56))) }
+}
+
+function moneyFlowCaption(view: MoneyFlowView, revealCount: number): string {
+  const revealed = view.points.slice(0, revealCount)
+  if (revealed.length === 0) {
+    return view.mode === 'week' ? 'The preview is unfolding — cash bars appear as each day closes.' : view.emptyText
+  }
+  const last = revealed[revealed.length - 1]
+  const total = last.merchant + last.traveler
+  const prefix = view.mode === 'week' ? (revealCount < view.points.length ? 'So far' : 'Week close') : 'Now'
+  let text = `${prefix}: ${money0(last.merchant)} in merchant tills and ${money0(
+    last.traveler,
+  )} with travelers (${money0(total)} total).`
+  if (revealed.length > 1) {
+    const first = revealed[0]
+    const change = total - (first.merchant + first.traveler)
+    if (Math.abs(change) >= 0.5) {
+      text += ` Total ${change > 0 ? 'up' : 'down'} ${money0(Math.abs(change))} since ${first.label}.`
+    }
+  }
+  return text
+}
+
+function renderMoneyFlowCard(view: MoneyFlowView, revealCount: number, force = false): void {
+  if (!force && activeMoneyFlowView === view && activeMoneyFlowReveal === revealCount) return
+  activeMoneyFlowView = view
+  activeMoneyFlowReveal = revealCount
+  const size = moneyFlowChartSize()
+  $('money-chart').innerHTML = renderMoneyFlowSvg(view.points, {
+    width: size.width,
+    height: size.height,
+    revealCount,
+    ariaLabel: view.ariaLabel,
+    emptyText: view.emptyText,
+    valueFormat: value => moneyCompact(value),
+  })
+  $('money-caption').textContent = moneyFlowCaption(view, revealCount)
+}
+
+function flowCaption(view: FlowView, revealCount: number): string {
+  const revealed = view.points.slice(0, revealCount)
+  if (revealed.length === 0) {
+    return view.mode === 'week' ? 'The preview is unfolding — flow bars appear as each day closes.' : view.emptyText
+  }
+  const inflow = sum(revealed.map(point => point.inflow))
+  const outflow = sum(revealed.map(point => point.outflow))
+  const orders = sum(revealed.map(point => point.orders))
+  const caravanIn = sum(revealed.map(point => point.caravanIn))
+  const caravanOut = sum(revealed.map(point => point.caravanOut))
+  const sinks = sum(revealed.map(point => point.sinks))
+  const investments = sum(revealed.map(point => point.investments))
+  const net = inflow - outflow
+  const windowLabel = view.mode === 'week' ? (revealCount < view.points.length ? 'So far' : 'This week') : 'On record'
+  let text = `${windowLabel}: ${money0(inflow)} entered and ${money0(outflow)} drained, net ${
+    net >= 0 ? '+' : '−'
+  }${money0(Math.abs(net))}.`
+  text += ` Orders paid ${money0(orders)}; caravan sales ${money0(caravanOut)} in and ${money0(
+    caravanIn,
+  )} out; rent, tax, repairs and shocks ${money0(sinks)}.`
+  if (investments > 0) text += ` Investments added ${money0(investments)}.`
+  return text
+}
+
+function renderFlowCard(view: FlowView, revealCount: number, force = false): void {
+  if (!force && activeFlowView === view && activeFlowReveal === revealCount) return
+  activeFlowView = view
+  activeFlowReveal = revealCount
+  const size = flowChartSize()
+  $('flow-chart').innerHTML = renderFlowSvg(view.points, {
+    width: size.width,
+    height: size.height,
+    revealCount,
+    ariaLabel: view.ariaLabel,
+    emptyText: view.emptyText,
+    valueFormat: value => moneyCompact(value),
+  })
+  $('flow-caption').textContent = flowCaption(view, revealCount)
+}
+
+/* ------------------------------------------------------------------ market map rendering */
+
+function updateHeatmapToggle(): void {
+  const toggle = $('heatmap-toggle')
+  for (const button of toggle.querySelectorAll<HTMLButtonElement>('[data-heatmap]')) {
+    const active = button.dataset.heatmap === heatmapMode
+    button.classList.toggle('is-active', active)
+    button.setAttribute('aria-pressed', String(active))
+  }
+}
+
+function nextHeatmapMode(mode: HeatmapMode): void {
+  if (heatmapMode === mode) return
+  heatmapMode = mode
+  if (activeHeatmapView) {
+    renderHeatmapCard(activeHeatmapView, true)
+    return
+  }
+  updateHeatmapToggle()
+  $('heatmap-legend').innerHTML = heatmapLegend(heatmapMode)
+  if (viewMode === 'week' && weekRun) {
+    renderHeatmapPlaceholder('The final market map appears when the preview finishes.', true)
+  }
+}
+
+function heatmapLegend(mode: HeatmapMode): string {
+  if (mode !== 'stock') {
+    return `<span class="heat-legend-item"><i class="heat-swatch down"></i>Cheaper</span>
+      <span class="heat-legend-item"><i class="heat-swatch flat"></i>Flat</span>
+      <span class="heat-legend-item"><i class="heat-swatch up"></i>Dearer</span>`
+  }
+  return `<span class="heat-legend-item"><i class="heat-swatch low"></i>Low</span>
+    <span class="heat-legend-item"><i class="heat-swatch mid"></i>Thin</span>
+    <span class="heat-legend-item"><i class="heat-swatch high"></i>Full</span>`
+}
+
+function renderHeatmapCard(view: HeatmapView, force = false): void {
+  const board = view[heatmapMode]
+  const cells = board.rows
+    .map(row => Object.values(row.cells).map(cell => `${cell.label}:${cell.tone}`).join(','))
+    .join('|')
+  const key = `${view.mode}|${heatmapMode}|${board.columns.length}|${board.rows.length}|${board.caption}|${cells}`
+  if (!force && key === activeHeatmapKey) return
+  activeHeatmapView = view
+  activeHeatmapKey = key
+  updateHeatmapToggle()
+  $('heatmap-sub').textContent = board.sub
+  $('heatmap-legend').innerHTML = heatmapLegend(heatmapMode)
+  $('heatmap-chart').innerHTML = renderHeatmap({
+    ariaLabel: board.ariaLabel,
+    columns: board.columns,
+    rows: board.rows,
+    emptyText: board.emptyText,
+  })
+  $('heatmap-caption').textContent = board.caption
+}
+
+function renderHeatmapPlaceholder(text: string, force = false): void {
+  if (!force && activeHeatmapKey === 'placeholder') return
+  activeHeatmapView = null
+  activeHeatmapKey = 'placeholder'
+  updateHeatmapToggle()
+  $('heatmap-sub').textContent =
+    viewMode === 'week'
+      ? 'Final simulated market state · the live town is unchanged.'
+      : 'Every traded good by merchant; empty cells mean no quote or stock.'
+  $('heatmap-legend').innerHTML = heatmapLegend(heatmapMode)
+  $('heatmap-chart').innerHTML = `<p class="empty-note">${esc(text)}</p>`
+  $('heatmap-caption').textContent =
+    viewMode === 'week'
+      ? 'This is a preview only; nothing here is applied or saved to the live town.'
+      : 'Waiting for merchant quotes…'
 }
 
 function buildWeekWealthRows(payload: FastForwardClonePayload, startSnapshot: PublicSnapshot | null): WealthRowView[] {
   const startCash = new Map<MerchantId, number>(
     (startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant.cash]),
   )
+  const finalReserve = new Map<MerchantId, number>(
+    (payload.finalMerchants ?? []).map(merchant => [merchant.id, merchant.reserve]),
+  )
+  const startReserve = new Map<MerchantId, number>(
+    (startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant.reserve]),
+  )
   return (payload.recap.standings ?? [])
     .map(standing => ({
       id: standing.merchantId,
       name: standing.displayName,
       cash: standing.cash,
+      reserve: finalReserve.get(standing.merchantId) ?? startReserve.get(standing.merchantId) ?? 0,
       delta: standing.cash - (startCash.get(standing.merchantId) ?? standing.cash),
+      history: [
+        ...(payload.summaries ?? []).map(summary => summary.merchantCash[standing.merchantId] ?? 0),
+        standing.cash,
+      ],
       open: standing.open,
       bankrupt: standing.bankrupt,
     }))
@@ -894,7 +1450,12 @@ function buildLiveWealthRows(current: PublicSnapshot): WealthRowView[] {
       id: merchant.id,
       name: merchant.displayName,
       cash: merchant.cash,
+      reserve: merchant.reserve,
       delta: merchant.cash - (current.daily.merchantCashStart[merchant.id] ?? merchant.cash),
+      history: [
+        ...current.summaries.slice(-7).map(summary => summary.merchantCash[merchant.id] ?? 0),
+        merchant.cash,
+      ],
       open: merchant.open,
       bankrupt: merchant.bankrupt,
     }))
@@ -1168,7 +1729,9 @@ function renderWealthCard(rows: WealthRowView[], reveal: number, mode: 'live' | 
   const chart = $('wealth-chart')
   chart.style.setProperty('--reveal', String(clamp(reveal, 0, 1)))
   $('wealth-sub').textContent =
-    mode === 'week' ? 'Final cash · colour = change from week open.' : 'Cash now · colour = change today.'
+    mode === 'week'
+      ? 'Final cash · colour = change from week open · tick = reserve. Stock is in the market map.'
+      : 'Cash now · colour = change today · tick = reserve. Stock is in the market map.'
   $('wealth-caption').textContent = wealthCaption(rows, mode)
   if (rows.length === 0) {
     chart.innerHTML = '<p class="empty-note">Waiting for the merchant tills…</p>'
@@ -1178,17 +1741,29 @@ function renderWealthCard(rows: WealthRowView[], reveal: number, mode: 'live' | 
   chart.innerHTML = `<ul class="wealth-list">${rows
     .map(row => {
       const width = clamp((row.cash / maxCash) * 100, 0, 100)
+      const reserve = clamp((row.reserve / maxCash) * 100, 0, 100)
       const tone = row.bankrupt ? 'closed' : row.delta > 0.5 ? 'up' : row.delta < -0.5 ? 'down' : 'flat'
       const delta =
         Math.abs(row.delta) < 0.5
           ? 'no change'
           : `${row.delta > 0 ? '+' : '−'}${moneyCompact(Math.abs(row.delta))}`
+      const spark =
+        row.history.length > 1
+          ? `<span class="wealth-spark" title="${esc(
+              row.history.map(value => money0(value)).join(' → '),
+            )}">${renderSparkline(
+              row.history.map((value, index) => ({ x: index, y: value })),
+              { width: 58, height: 18, color: row.delta < -0.5 ? '#e07a6b' : '#9ad7b0' },
+            )}</span>`
+          : ''
       return `<li class="wealth-row${row.bankrupt ? ' is-closed' : ''}">
         <div class="wealth-top">
           <span class="wealth-name">${esc(row.name)}</span>
-          <span class="wealth-figure">${money0(row.cash)} <em class="wealth-delta ${tone}">${esc(delta)}</em></span>
+          <span class="wealth-figure">${spark}${money0(row.cash)} <em class="wealth-delta ${tone}">${esc(delta)}</em></span>
         </div>
-        <div class="wealth-track"><span class="wealth-fill ${tone}" style="width:${width.toFixed(1)}%"></span></div>
+        <div class="wealth-track"><span class="wealth-fill ${tone}" style="width:${width.toFixed(1)}%"></span><span class="wealth-reserve" style="left:${reserve.toFixed(
+          1,
+        )}%" title="Reserve floor: ${money0(row.reserve)}"></span></div>
       </li>`
     })
     .join('')}</ul>`
@@ -1211,6 +1786,10 @@ function renderVolumeCard(view: VolumeView, revealCount: number, force = false):
   if (!force && activeVolumeView === view && activeVolumeCount === revealCount) return
   activeVolumeView = view
   activeVolumeCount = revealCount
+  $('volume-sub').textContent =
+    view.mode === 'week'
+      ? 'Units traded each day as the preview runs.'
+      : 'Units traded each day; today is in progress.'
   const size = volumeChartSize()
   $('volume-chart').innerHTML = renderVolumeSvg(view.points, {
     width: size.width,
@@ -1279,11 +1858,25 @@ function buildBotActivityRows(events: readonly SequencedMarketEvent[]): BotActiv
   return [...rows.values()].sort((left, right) => right.total - left.total || left.name.localeCompare(right.name))
 }
 
+function setActivityCopy(mode: 'live' | 'week'): void {
+  $('activity-title').textContent = 'Bot activity'
+  $('activity-sub').textContent =
+    mode === 'week'
+      ? 'Sampled actions from the preview; the daily volume bars count every trade.'
+      : 'Trades, gathers and deliveries by the eight townsfolk.'
+  const hint = $('activity-hint')
+  hint.textContent = mode === 'week' ? 'Preview sample' : 'Session actions'
+  hint.title =
+    mode === 'week'
+      ? 'The fast-forward payload samples events; daily summaries carry every trade.'
+      : 'Only actions recorded in this browser session are shown.'
+}
+
 function renderBotActivity(events: readonly SequencedMarketEvent[], force = false): void {
   const relevant = events.filter(isBotAction)
   const rows = buildBotActivityRows(relevant)
   const latest = relevant[relevant.length - 1]
-  const signature = `${rows.map(row => `${row.id}:${row.trade}:${row.gather}:${row.order}`).join('|')}|${latest?.id ?? ''}`
+  const signature = `${viewMode}|${rows.map(row => `${row.id}:${row.trade}:${row.gather}:${row.order}`).join('|')}|${latest?.id ?? ''}`
   if (!force && signature === activeActivitySignature) return
   activeActivitySignature = signature
 
@@ -1333,7 +1926,10 @@ function renderBotActivity(events: readonly SequencedMarketEvent[], force = fals
       <span class="activity-legend-item"><i class="activity-swatch order"></i>${countLabel(orders, 'delivery', 'deliveries')}</span>
     </div>`
 
-  caption.textContent = `${countLabel(relevant.length, 'recorded action')} · ${money0(tradeValue)} moved in bot trades.`
+  caption.textContent =
+    viewMode === 'week'
+      ? `${countLabel(relevant.length, 'sampled action')} · preview events are sampled; daily summaries count every trade.`
+      : `${countLabel(relevant.length, 'recorded action')} · ${money0(tradeValue)} moved in bot trades.`
   latestEl.innerHTML = `<span class="activity-dot" aria-hidden="true"></span>${esc(latest?.message ?? '')}`
   latestEl.title = latest?.message ?? ''
 }
@@ -1532,13 +2128,13 @@ function weekCompleteStory(payload: FastForwardClonePayload): StoryItem {
       <div><span>Stall closures</span><b>${closures}</b></div>
       <div><span>Caravan arrivals</span><b>${recap.caravan.totalArrivals}</b></div>
     </div>
-    <p class="story-meta-line">Deterministic 7-day clone · seed ${esc(payload.seed)}</p>`
+    <p class="story-meta-line">Throwaway 7-day clone · seed ${esc(payload.seed)} · result not saved</p>`
 
   return {
     id: 'week-complete',
     time: payload.toTime + 1,
     day: payload.endDay,
-    kind: 'Week complete',
+    kind: 'Preview complete',
     tone: closures > 0 ? 'risk' : 'good',
     title: `Seven days later — ${recap.headline}`,
     detailHtml,
@@ -1798,6 +2394,9 @@ function startWeekRun(payload: FastForwardClonePayload): void {
     startMerchantCash: new Map((startSnapshot?.merchants ?? []).map(merchant => [merchant.id, merchant.cash])),
     priceView: buildWeekPriceView(payload, startSnapshot),
     volumeView: buildWeekVolumeView(payload),
+    moneyFlowView: buildWeekMoneyFlowView(payload),
+    flowView: buildWeekFlowView(payload),
+    heatmapView: buildWeekHeatmapView(payload, startSnapshot),
     wealthRows: buildWeekWealthRows(payload, startSnapshot),
     reopenCount: 0,
     mirror: new Map(),
@@ -1808,6 +2407,8 @@ function startWeekRun(payload: FastForwardClonePayload): void {
   }
   weekRun = state
   viewMode = 'week'
+  renderModeBadge()
+  setActivityCopy('week')
   selectedStoryId = null
   activePriceView = null
   activePriceSignature = ''
@@ -1815,17 +2416,23 @@ function startWeekRun(payload: FastForwardClonePayload): void {
   activeCaptionKey = ''
   activeVolumeView = null
   activeVolumeCount = -1
+  activeMoneyFlowView = null
+  activeMoneyFlowReveal = -1
+  activeFlowView = null
+  activeFlowReveal = -1
+  activeHeatmapView = null
+  activeHeatmapKey = ''
   renderWealthCard(state.wealthRows, 0, 'week')
 
-  $('hero-context').textContent = 'Simulated 7-day preview'
+  $('hero-context').textContent = 'Simulated 7-day preview · not saved'
   $('view-live').hidden = false
   $('ff-strip').hidden = false
   $('ff-strip').classList.remove('is-error')
   $('ff-run').disabled = true
-  $('ff-run').textContent = 'Playing week…'
+  $('ff-run').textContent = 'Playing preview…'
   $('ff-skip').hidden = false
   setProgress(0, `Preview day 1 of ${payload.days}`)
-  setRunStatus(`Preview day 1 of ${payload.days} · live unchanged.`)
+  setRunStatus(`Preview day 1 of ${payload.days} · live town not changed or saved.`)
   renderWeekFrame(state, payload.fromTime, false, true)
 
   const playback = new FastForwardPlayback(
@@ -1840,9 +2447,9 @@ function startWeekRun(payload: FastForwardClonePayload): void {
       },
       onProgress(progress: PlaybackProgress) {
         if (weekRun !== state) return
-        const dayLabel = progress.phase === 'done' ? 'Week complete' : progressLabel(state, progress.simTime)
+        const dayLabel = progress.phase === 'done' ? 'Preview complete' : progressLabel(state, progress.simTime)
         setProgress(progress.percent, dayLabel)
-        setRunStatus(progress.phase === 'done' ? dayLabel : `${dayLabel} · live unchanged.`)
+        setRunStatus(progress.phase === 'done' ? `${dayLabel} · live town unchanged · not saved.` : `${dayLabel} · not saved.`)
         renderWeekFrame(state, progress.simTime, progress.phase === 'done', false)
       },
       onDone() {
@@ -1904,6 +2511,10 @@ function renderWeekFrame(state: WeekRun, simTime: number, complete: boolean, for
   const chartReveal = reducedMotionQuery.matches ? stepReveal : smoothReveal
   renderPriceCard(state.priceView, chartReveal)
   renderVolumeCard(state.volumeView, complete ? state.volumeView.points.length : revealed.length)
+  renderMoneyFlowCard(state.moneyFlowView, complete ? state.moneyFlowView.points.length : revealed.length)
+  renderFlowCard(state.flowView, complete ? state.flowView.points.length : revealed.length)
+  if (complete) renderHeatmapCard(state.heatmapView, force)
+  else renderHeatmapPlaceholder('The final market map appears when the preview finishes.')
   updateWealthReveal(chartReveal)
 
   if (!changed) return
@@ -1914,7 +2525,7 @@ function renderWeekFrame(state: WeekRun, simTime: number, complete: boolean, for
     title: status.title,
     tone: status.tone,
     day,
-    daySub: complete ? `${payload.days} simulated days · town day ${day}` : `preview day ${preview} of ${payload.days}`,
+    daySub: complete ? `${payload.days} simulated days · town day ${day} · not saved` : `preview day ${preview} of ${payload.days}`,
     open,
     openSub: `of ${totalStalls} merchant stalls`,
     cash,
@@ -1931,7 +2542,7 @@ function renderWeekFrame(state: WeekRun, simTime: number, complete: boolean, for
   state.renderedOpen = open
   state.revealedStoryCount = revealedStory.length
   const wrap = $('ff-progress-wrap')
-  wrap.setAttribute('aria-valuetext', complete ? 'Week complete' : `Preview day ${preview} of ${payload.days}`)
+  wrap.setAttribute('aria-valuetext', complete ? 'Preview complete · not saved' : `Preview day ${preview} of ${payload.days}`)
 }
 
 function weekStatus(
@@ -1968,12 +2579,12 @@ function finishWeekRun(state: WeekRun): void {
   if (weekRun !== state) return
   const payload = state.payload
   renderWeekFrame(state, payload.toTime, true, true)
-  setProgress(100, 'Week complete')
+  setProgress(100, 'Preview complete · not saved')
   $('ff-status').textContent = payload.live?.unchanged
-    ? 'Week complete · live town unchanged.'
-    : 'Week complete · live world changed.'
+    ? 'Preview complete · live town unchanged · result not saved.'
+    : 'Preview complete · live world changed while the clone ran · result not saved.'
   $('ff-run').disabled = false
-  $('ff-run').textContent = 'Run 7-day week'
+  $('ff-run').textContent = 'Preview 7 days'
   $('ff-skip').hidden = true
   $('ff-strip').classList.remove('is-error')
   renderMerchantCards(merchantOverridesFromRecap(payload.recap))
@@ -2053,6 +2664,7 @@ function returnToLive(): void {
   weekRun?.playback?.destroy()
   weekRun = null
   viewMode = 'live'
+  renderModeBadge()
   selectedStoryId = null
   activePriceView = null
   activePriceSignature = ''
@@ -2060,11 +2672,18 @@ function returnToLive(): void {
   activeCaptionKey = ''
   activeVolumeView = null
   activeVolumeCount = -1
+  activeMoneyFlowView = null
+  activeMoneyFlowReveal = -1
+  activeFlowView = null
+  activeFlowReveal = -1
+  activeHeatmapView = null
+  activeHeatmapKey = ''
   $('ff-strip').hidden = true
   $('ff-strip').classList.remove('is-error')
+  $('ff-status').textContent = 'Ready.'
   $('ff-skip').hidden = true
   $('ff-run').disabled = false
-  $('ff-run').textContent = 'Run 7-day week'
+  $('ff-run').textContent = 'Preview 7 days'
   $('view-live').hidden = true
   $('hero-context').textContent = liveContextLabel()
   $('clock-chip').classList.remove('is-preview')
@@ -2326,7 +2945,7 @@ function renderRunProof(): void {
   const container = $('run-proof')
   if (!lastFastForward) {
     container.innerHTML =
-      '<p class="proof-note">Run a 7-day week to record a deterministic clone proof here. The preview never advances the live town.</p>'
+      '<p class="proof-note">Run a 7-day preview to record a deterministic clone proof here. The preview never advances or saves the live town.</p>'
     return
   }
   const run = lastFastForward
@@ -2345,7 +2964,7 @@ function renderRunProof(): void {
     </div>
     <p class="proof-note">${
       unchanged
-        ? 'The seven days ran on a throwaway clone. The live economy sequence and clock did not move.'
+        ? 'The seven days ran on a throwaway clone. The live economy sequence and clock did not move, and the result was not saved.'
         : 'The live world changed while the clone was running; the preview itself still ran on a clone.'
     }</p>`
 }

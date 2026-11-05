@@ -36,7 +36,8 @@
           <span class="topbar-spacer"></span>
 
           <div class="topbar-actions">
-            <button class="btn btn-primary" id="ff-run" type="button">Run 7-day week</button>
+            <span class="preview-pill" id="preview-pill" title="The week forecast never advances or saves the live town">Preview only · not saved</span>
+            <button class="btn btn-primary" id="ff-run" type="button">Preview 7 days</button>
             <button class="btn btn-quiet" id="ff-skip" type="button" hidden>Skip to end</button>
             <a class="game-link" href="./index.html" id="open-game-link">Open game <span aria-hidden="true">→</span></a>
           </div>
@@ -56,7 +57,7 @@
               aria-valuemax="100"
               aria-valuenow="0"
               aria-valuetext="Ready"
-              aria-label="7-day simulation progress"
+              aria-label="7-day preview progress"
             >
               <span id="ff-progress"></span>
             </div>
@@ -80,6 +81,11 @@
             money. This page watches the whole town.
           </p>
 
+          <p class="preview-note" id="preview-note">
+            <strong>Preview only.</strong> The 7-day week is a forecast on a throwaway copy. It never advances, changes
+            or saves the live town. <a href="./index.html">Run a real week in the game <span aria-hidden="true">→</span></a>
+          </p>
+
           <p class="glance" id="hero-glance" aria-label="Week at a glance">
             <span class="glance-item">Day <b id="stat-day">—</b></span>
             <span class="glance-sep" aria-hidden="true">·</span>
@@ -94,8 +100,8 @@
         <section class="card price-card" aria-labelledby="price-title">
           <header class="card-head price-head">
             <div>
-              <p class="section-kicker" id="price-range">The market at a glance</p>
-              <h2 id="price-title">Prices this week</h2>
+              <p class="section-kicker" id="price-range">Biggest recorded moves</p>
+              <h2 id="price-title">Price movers</h2>
               <p class="card-sub" id="price-sub">
                 Each line starts at its first recorded ask. Hover or focus a day for exact prices.
               </p>
@@ -107,19 +113,73 @@
             <div class="price-tooltip" id="price-tooltip" role="tooltip" hidden></div>
           </div>
           <p class="chart-caption" id="price-caption">
-            Run the 7-day week to draw the town's prices here.
+            Run the 7-day preview to draw the town's prices here.
           </p>
           <p class="chart-source" id="price-source">
             Recorded merchant quotes only. Dashed spans mean no quote was sampled that day.
           </p>
         </section>
 
+        <div class="insight-grid">
+          <section class="card money-card" aria-labelledby="money-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">Where the money sits</p>
+                <h2 id="money-title">Cash in town</h2>
+                <p class="card-sub">Merchant tills and traveler wallets, day by day.</p>
+              </div>
+            </header>
+            <div class="chart-legend" aria-hidden="true">
+              <span class="legend-swatch merchant"></span>Merchant tills
+              <span class="legend-swatch traveler"></span>Traveler wallets
+              <span class="legend-swatch total"></span>Total
+            </div>
+            <div class="money-chart" id="money-chart" aria-live="off"></div>
+            <p class="chart-caption" id="money-caption">Waiting for the town's cash history…</p>
+          </section>
+
+          <section class="card flow-card" aria-labelledby="flow-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">What feeds the town</p>
+                <h2 id="flow-title">Money in and out</h2>
+                <p class="card-sub">External taps and drains. Trades move cash inside town; they do not create it.</p>
+              </div>
+            </header>
+            <div class="chart-legend" aria-hidden="true">
+              <span class="legend-swatch inflow"></span>Inflow
+              <span class="legend-swatch outflow"></span>Outflow
+              <span class="legend-swatch net"></span>Net
+            </div>
+            <div class="flow-chart" id="flow-chart" aria-live="off"></div>
+            <p class="chart-caption" id="flow-caption">Waiting for the first closed day…</p>
+          </section>
+        </div>
+
+        <section class="card heatmap-card" aria-labelledby="heatmap-title">
+          <header class="card-head heatmap-head">
+            <div>
+              <p class="section-kicker">Every stall, every good</p>
+              <h2 id="heatmap-title">Market map</h2>
+              <p class="card-sub" id="heatmap-sub">Price movement against the current day's opening quote.</p>
+            </div>
+            <div class="segmented" id="heatmap-toggle" role="group" aria-label="Market map mode">
+              <button class="segmented-button is-active" type="button" data-heatmap="price" aria-pressed="true">Price moves</button>
+              <button class="segmented-button" type="button" data-heatmap="usual" aria-pressed="false">Vs usual</button>
+              <button class="segmented-button" type="button" data-heatmap="stock" aria-pressed="false">Stock cover</button>
+            </div>
+          </header>
+          <div class="heatmap-legend" id="heatmap-legend" aria-hidden="true"></div>
+          <div class="heatmap-wrap" id="heatmap-chart" aria-live="off"></div>
+          <p class="chart-caption" id="heatmap-caption">Waiting for merchant quotes…</p>
+        </section>
+
         <div class="support-grid">
           <section class="card wealth-card" aria-labelledby="wealth-title">
             <header class="card-head">
               <div>
-                <p class="section-kicker">Who got richer</p>
-                <h2 id="wealth-title">Merchant wealth</h2>
+                <p class="section-kicker">Who holds cash</p>
+                <h2 id="wealth-title">Merchant cash</h2>
                 <p class="card-sub" id="wealth-sub">Cash in each till · colour shows change from week open.</p>
               </div>
             </header>
@@ -132,7 +192,7 @@
               <div>
                 <p class="section-kicker">How busy it got</p>
                 <h2 id="volume-title">Trade volume</h2>
-                <p class="card-sub">Units traded each day. Bars fill in as the week runs.</p>
+                <p class="card-sub" id="volume-sub">Units traded each day; today is in progress.</p>
               </div>
             </header>
             <div class="volume-chart" id="volume-chart"></div>
@@ -144,9 +204,9 @@
               <div>
                 <p class="section-kicker">The economy, acting</p>
                 <h2 id="activity-title">Bot activity</h2>
-                <p class="card-sub">Trades, gathers and deliveries by the eight townsfolk.</p>
+                <p class="card-sub" id="activity-sub">Trades, gathers and deliveries by the eight townsfolk.</p>
               </div>
-              <p class="card-hint">Every bar is a recorded action.</p>
+              <p class="card-hint" id="activity-hint">Session actions</p>
             </header>
             <div class="activity-chart" id="activity-chart" aria-live="off"></div>
             <p class="activity-latest" id="activity-latest">Waiting for the townsfolk…</p>

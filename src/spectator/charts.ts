@@ -559,3 +559,365 @@ export function renderSparkline(points: Point[], options: SparklineOptions = {})
 }
 
 export const chartHints = { timeLabel, money: compact }
+
+/* ------------------------------------------------------------------ money flow */
+
+export interface MoneyFlowPoint {
+  label: string
+  merchant: number
+  traveler: number
+}
+
+export interface MoneyFlowOptions {
+  width?: number
+  height?: number
+  ariaLabel?: string
+  emptyText?: string
+  revealCount?: number
+  valueFormat?: (value: number) => string
+}
+
+/**
+ * Stacked daily cash bars: merchant tills at the bottom, traveler wallets on
+ * top. The gold line is the town total, so the split and the total move
+ * together in one glance.
+ */
+export function renderMoneyFlowChart(
+  points: MoneyFlowPoint[],
+  options: MoneyFlowOptions = {},
+): string {
+  const width = options.width ?? 560
+  const height = options.height ?? 300
+  const pad = { top: 24, right: 16, bottom: 38, left: 66 }
+  const plotLeft = pad.left
+  const plotRight = width - pad.right
+  const plotW = Math.max(10, plotRight - plotLeft)
+  const plotH = Math.max(10, height - pad.top - pad.bottom)
+  const plotBottom = pad.top + plotH
+  const revealCount = clamp(options.revealCount ?? points.length, 0, points.length)
+  const formatValue = options.valueFormat ?? compact
+  const maxValue = Math.max(
+    1,
+    ...points.map(point => Math.max(0, point.merchant) + Math.max(0, point.traveler)),
+  )
+  const step = niceStep(maxValue / 3)
+  const top = Math.max(step, Math.ceil(maxValue / step) * step)
+
+  if (points.length === 0) {
+    return `<svg class="chart-svg money-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+      options.ariaLabel ?? 'Town cash split',
+    )}">
+      <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.014)"/>
+      <text x="${width / 2}" y="${height / 2}" fill="#77849a" font-size="13" text-anchor="middle">${esc(
+        options.emptyText ?? 'Cash history appears as days close…',
+      )}</text>
+    </svg>`
+  }
+
+  const scaleY = (value: number): number => pad.top + plotH - (value / top) * plotH
+  let grid = ''
+  for (let index = 0; index <= 3; index += 1) {
+    const value = (top * index) / 3
+    const y = scaleY(value)
+    grid +=
+      `<line x1="${plotLeft}" y1="${y.toFixed(1)}" x2="${plotRight}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.055)" stroke-width="1"/>` +
+      `<text class="chart-axis-label" x="${plotLeft - 9}" y="${(y + 4).toFixed(1)}" fill="#77849a" font-size="11" text-anchor="end">${esc(
+        formatValue(value),
+      )}</text>`
+  }
+
+  const stepX = plotW / Math.max(1, points.length)
+  const barW = Math.min(46, stepX * 0.58)
+  const centers: Array<{ x: number; total: number }> = []
+  const bars = points
+    .map((point, index) => {
+      const center = plotLeft + stepX * (index + 0.5)
+      const merchant = Math.max(0, point.merchant)
+      const traveler = Math.max(0, point.traveler)
+      const total = merchant + traveler
+      centers.push({ x: center, total })
+      const x = center - barW / 2
+      if (index >= revealCount) {
+        return `<rect x="${x.toFixed(1)}" y="${pad.top}" width="${barW.toFixed(
+          1,
+        )}" height="${plotH}" rx="5" fill="rgba(255,255,255,0.025)"/>`
+      }
+      const merchantH = total > 0 ? (merchant / top) * plotH : 0
+      const travelerH = total > 0 ? (traveler / top) * plotH : 0
+      const merchantY = plotBottom - merchantH
+      const travelerY = merchantY - travelerH
+      return `<g><title>${esc(
+        `${point.label}: ${formatValue(total)} total · ${formatValue(merchant)} in merchant tills · ${formatValue(
+          traveler,
+        )} in traveler wallets`,
+      )}</title>
+        <rect x="${x.toFixed(1)}" y="${merchantY.toFixed(1)}" width="${barW.toFixed(
+          1,
+        )}" height="${Math.max(0, merchantH).toFixed(1)}" rx="4" fill="#eab35e" opacity="0.9"/>
+        <rect x="${x.toFixed(1)}" y="${travelerY.toFixed(1)}" width="${barW.toFixed(
+          1,
+        )}" height="${Math.max(0, travelerH).toFixed(1)}" rx="4" fill="#64b7a6" opacity="0.9"/>
+      </g>`
+    })
+    .join('')
+
+  const revealedCenters = centers.slice(0, revealCount)
+  const totalPath = revealedCenters
+    .map(
+      (point, index) =>
+        `${index === 0 ? 'M' : 'L'}${point.x.toFixed(1)},${scaleY(point.total).toFixed(1)}`,
+    )
+    .join(' ')
+  const totalDots = revealedCenters
+    .map(
+      point =>
+        `<circle cx="${point.x.toFixed(1)}" cy="${scaleY(point.total).toFixed(1)}" r="2.8" fill="#0d1118" stroke="#ffd28a" stroke-width="1.8"/>`,
+    )
+    .join('')
+  const xLabels = points
+    .map((point, index) => {
+      const center = plotLeft + stepX * (index + 0.5)
+      return `<text class="chart-axis-label" x="${center.toFixed(1)}" y="${height - 14}" fill="#77849a" font-size="11" text-anchor="middle">${esc(
+        point.label,
+      )}</text>`
+    })
+    .join('')
+
+  return `<svg class="chart-svg money-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+    options.ariaLabel ?? 'Town cash split by day',
+  )}">
+    <title>${esc(options.ariaLabel ?? 'Town cash split by day')}</title>
+    <desc>${esc(
+      'Stacked bars show merchant tills and traveler wallets; the gold line is total cash in town.',
+    )}</desc>
+    <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.012)"/>
+    ${grid}${bars}
+    <path d="${totalPath}" fill="none" stroke="#ffd28a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    ${totalDots}${xLabels}
+  </svg>`
+}
+
+/* ------------------------------------------------------------------ flow balance */
+
+export interface FlowPoint {
+  label: string
+  inflow: number
+  outflow: number
+  net: number
+  orders: number
+  caravanIn: number
+  caravanOut: number
+  investments: number
+  sinks: number
+}
+
+export interface FlowChartOptions {
+  width?: number
+  height?: number
+  ariaLabel?: string
+  emptyText?: string
+  revealCount?: number
+  valueFormat?: (value: number) => string
+}
+
+/** Diverging daily bars: external inflows above zero, drains below. */
+export function renderFlowChart(
+  points: FlowPoint[],
+  options: FlowChartOptions = {},
+): string {
+  const width = options.width ?? 560
+  const height = options.height ?? 300
+  const pad = { top: 24, right: 16, bottom: 38, left: 66 }
+  const plotLeft = pad.left
+  const plotRight = width - pad.right
+  const plotW = Math.max(10, plotRight - plotLeft)
+  const plotH = Math.max(10, height - pad.top - pad.bottom)
+  const baseline = pad.top + plotH / 2
+  const halfH = plotH / 2
+  const revealCount = clamp(options.revealCount ?? points.length, 0, points.length)
+  const formatValue = options.valueFormat ?? compact
+  const maxAbs = Math.max(
+    1,
+    ...points.flatMap(point => [
+      Math.max(0, point.inflow),
+      Math.max(0, point.outflow),
+      Math.abs(point.net),
+    ]),
+  )
+  const step = niceStep(maxAbs)
+  const top = Math.max(step, Math.ceil(maxAbs / step) * step)
+
+  if (points.length === 0) {
+    return `<svg class="chart-svg flow-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+      options.ariaLabel ?? 'External money flows',
+    )}">
+      <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.014)"/>
+      <text x="${width / 2}" y="${height / 2}" fill="#77849a" font-size="13" text-anchor="middle">${esc(
+        options.emptyText ?? 'Flows appear as days close…',
+      )}</text>
+    </svg>`
+  }
+
+  const scaleY = (value: number): number => baseline - (value / top) * halfH
+  const grid = [top, 0, -top]
+    .map(value => {
+      const y = scaleY(value)
+      const label = value === 0 ? '0' : value > 0 ? `+${formatValue(value)}` : `−${formatValue(-value)}`
+      return `<line x1="${plotLeft}" y1="${y.toFixed(1)}" x2="${plotRight}" y2="${y.toFixed(
+        1,
+      )}" stroke="${value === 0 ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.055)'}" stroke-width="1"/>` +
+        `<text class="chart-axis-label" x="${plotLeft - 9}" y="${(y + 4).toFixed(1)}" fill="#77849a" font-size="11" text-anchor="end">${esc(
+          label,
+        )}</text>`
+    })
+    .join('')
+
+  const stepX = plotW / Math.max(1, points.length)
+  const barW = Math.min(18, stepX * 0.27)
+  const centers: Array<{ x: number; net: number }> = []
+  const bars = points
+    .map((point, index) => {
+      const center = plotLeft + stepX * (index + 0.5)
+      centers.push({ x: center, net: point.net })
+      if (index >= revealCount) {
+        return `<rect x="${(center - barW).toFixed(1)}" y="${pad.top}" width="${(barW * 2).toFixed(
+          1,
+        )}" height="${plotH}" rx="5" fill="rgba(255,255,255,0.02)"/>`
+      }
+      const inflow = Math.max(0, point.inflow)
+      const outflow = Math.max(0, point.outflow)
+      const inflowH = (inflow / top) * halfH
+      const outflowH = (outflow / top) * halfH
+      const inflowY = baseline - inflowH
+      const outflowY = baseline
+      return `<g><title>${esc(
+        `${point.label}: +${formatValue(inflow)} in · −${formatValue(outflow)} out · net ${
+          point.net >= 0 ? '+' : '−'
+        }${formatValue(Math.abs(point.net))}\nOrders ${formatValue(point.orders)} · caravan in ${formatValue(
+          point.caravanIn,
+        )} · caravan out ${formatValue(point.caravanOut)} · investments ${formatValue(
+          point.investments,
+        )} · sinks ${formatValue(point.sinks)}`,
+      )}</title>
+        <rect x="${(center - barW).toFixed(1)}" y="${inflowY.toFixed(1)}" width="${barW.toFixed(
+          1,
+        )}" height="${Math.max(0, inflowH).toFixed(1)}" rx="3" fill="#76c79a" opacity="0.88"/>
+        <rect x="${center.toFixed(1)}" y="${outflowY.toFixed(1)}" width="${barW.toFixed(
+          1,
+        )}" height="${Math.max(0, outflowH).toFixed(1)}" rx="3" fill="#e07a6b" opacity="0.88"/>
+      </g>`
+    })
+    .join('')
+
+  const netPath = centers
+    .slice(0, revealCount)
+    .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x.toFixed(1)},${scaleY(point.net).toFixed(1)}`)
+    .join(' ')
+  const netDots = centers
+    .slice(0, revealCount)
+    .map(
+      point =>
+        `<circle cx="${point.x.toFixed(1)}" cy="${scaleY(point.net).toFixed(1)}" r="2.8" fill="#0d1118" stroke="#eab35e" stroke-width="1.8"/>`,
+    )
+    .join('')
+  const xLabels = points
+    .map((point, index) => {
+      const center = plotLeft + stepX * (index + 0.5)
+      return `<text class="chart-axis-label" x="${center.toFixed(1)}" y="${height - 14}" fill="#77849a" font-size="11" text-anchor="middle">${esc(
+        point.label,
+      )}</text>`
+    })
+    .join('')
+
+  return `<svg class="chart-svg flow-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(
+    options.ariaLabel ?? 'External money flows by day',
+  )}">
+    <title>${esc(options.ariaLabel ?? 'External money flows by day')}</title>
+    <desc>${esc(
+      'Green bars are external inflows; red bars are drains. The gold line is net flow. Trades inside town are excluded because they only move cash between tills and wallets.',
+    )}</desc>
+    <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.012)"/>
+    ${grid}${bars}
+    <path d="${netPath}" fill="none" stroke="#eab35e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    ${netDots}${xLabels}
+  </svg>`
+}
+
+/* ------------------------------------------------------------------ heatmap */
+
+export type HeatmapTone = 'up' | 'down' | 'flat' | 'low' | 'mid' | 'high' | 'empty'
+
+export interface HeatmapCell {
+  label: string
+  title: string
+  tone: HeatmapTone
+  strength?: number
+}
+
+export interface HeatmapColumn {
+  id: string
+  label: string
+}
+
+export interface HeatmapRow {
+  id: string
+  label: string
+  cells: Record<string, HeatmapCell>
+}
+
+export interface HeatmapOptions {
+  ariaLabel: string
+  columns: HeatmapColumn[]
+  rows: HeatmapRow[]
+  emptyText?: string
+}
+
+const heatBackground = (tone: HeatmapTone, strength: number): string => {
+  const alpha = 0.1 + Math.max(0, Math.min(1, strength)) * 0.32
+  switch (tone) {
+    case 'up':
+      return `rgba(234,179,94,${alpha.toFixed(3)})`
+    case 'down':
+      return `rgba(96,165,250,${alpha.toFixed(3)})`
+    case 'low':
+      return `rgba(224,122,107,${alpha.toFixed(3)})`
+    case 'mid':
+      return `rgba(234,179,94,${alpha.toFixed(3)})`
+    case 'high':
+      return `rgba(118,199,154,${alpha.toFixed(3)})`
+    case 'flat':
+      return 'rgba(255,255,255,0.045)'
+    default:
+      return 'transparent'
+  }
+}
+
+/** Compact table heatmap used for the all-merchant price/stock board. */
+export function renderHeatmap(options: HeatmapOptions): string {
+  if (options.rows.length === 0 || options.columns.length === 0) {
+    return `<p class="empty-note">${esc(options.emptyText ?? 'No market observations yet.')}</p>`
+  }
+  const head = options.columns
+    .map(column => `<th scope="col" title="${esc(column.label)}">${esc(column.label)}</th>`)
+    .join('')
+  const rows = options.rows
+    .map(
+      row =>
+        `<tr><th scope="row">${esc(row.label)}</th>${options.columns
+          .map(column => {
+            const cell = row.cells[column.id]
+            if (!cell || cell.tone === 'empty') {
+              return '<td class="heat-cell is-empty" aria-label="No observation">·</td>'
+            }
+            const background = heatBackground(cell.tone, cell.strength ?? 0.45)
+            return `<td class="heat-cell heat-${cell.tone}" style="background:${background}" title="${esc(
+              cell.title,
+            )}">${esc(cell.label)}</td>`
+          })
+          .join('')}</tr>`,
+    )
+    .join('')
+  return `<div class="heatmap-scroll"><table class="heatmap-table" role="table" aria-label="${esc(
+    options.ariaLabel,
+  )}"><caption class="visually-hidden">${esc(options.ariaLabel)}</caption><thead><tr><th scope="col">Stall</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>`
+}

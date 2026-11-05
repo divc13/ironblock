@@ -114,6 +114,7 @@ describe('observability HTTP middleware', () => {
       live: { unchanged: boolean; sequenceBefore: number; sequenceAfter: number }
       timing: { days: number; steps: number }
       series: unknown[]
+      finalMerchants: Array<{ id: string; cash: number; reserve: number }>
     }
     assert.equal(payload.ok, true)
     assert.equal(payload.mode, 'deterministic-clone')
@@ -121,6 +122,9 @@ describe('observability HTTP middleware', () => {
     assert.equal(payload.live.unchanged, true)
     assert.equal(payload.live.sequenceAfter, liveBefore, 'live world untouched')
     assert.equal(payload.series.length, 1)
+    assert.equal(payload.finalMerchants.length > 0, true)
+    assert.equal(typeof payload.finalMerchants[0].cash, 'number')
+    assert.equal(typeof payload.finalMerchants[0].reserve, 'number')
     assert.ok(payload.timing.steps > 0)
 
     // Invalid body is validated: a malformed payload is rejected with 400

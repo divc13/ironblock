@@ -235,6 +235,15 @@ test('fast-forward clone is deterministic and leaves live state untouched', () =
   assert.equal(first.events.length > 0, true)
   assert.ok(first.annotations.length > 0)
   assert.ok(first.recap.headline.length > 0)
+  assert.equal(first.finalMerchants.length, first.recap.standings.length)
+  for (const merchant of first.finalMerchants) {
+    assert.ok(merchant.id.length > 0)
+    assert.ok(Number.isFinite(merchant.cash))
+    assert.ok(Number.isFinite(merchant.reserve))
+    assert.ok(Object.keys(merchant.askPrices).length > 0)
+    assert.ok(Object.keys(merchant.stock).length > 0)
+    assert.ok(Object.keys(merchant.targetStock).length > 0)
+  }
 
   const payloadKeys = Object.keys(first.events[0])
   for (const key of ['id', 'time', 'type', 'actor', 'before', 'after', 'reasons', 'message']) {
@@ -251,6 +260,7 @@ test('fast-forward clone is deterministic and leaves live state untouched', () =
   assert.deepEqual(second.series, first.series)
   assert.deepEqual(second.events, first.events)
   assert.deepEqual(second.annotations, first.annotations)
+  assert.deepEqual(second.finalMerchants, first.finalMerchants)
   assert.equal(second.recap.headline, first.recap.headline)
   assert.equal(second.seed, first.seed)
 })
