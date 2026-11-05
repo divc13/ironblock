@@ -335,6 +335,21 @@ export class MockEconomyClient implements EconomyClient {
       openMerchants: merchants.filter(merchant => merchant.open && !merchant.bankrupt).length,
       bankruptcies: merchants.filter(merchant => merchant.bankrupt).length,
       townHealth: this.townHealth(),
+      summaries: [],
+      today: {
+        day: this.sessionDay,
+        startedAt: (this.sessionDay - 1) * DAY_SECONDS,
+        tradeVolume: this.player.stats.tradeVolume,
+        tradeValue: this.player.stats.tradeValue,
+        botTrades: 0,
+        totalPlayerCash: this.player.cash,
+        merchantCashStart: Object.fromEntries(
+          merchants.map(merchant => [
+            merchant.id,
+            this.config.merchants[merchant.id]?.cash ?? merchant.cash,
+          ]),
+        ),
+      },
       recentEvents: this.events.slice(-25).reverse(),
       orderBoardSupported: false,
     }

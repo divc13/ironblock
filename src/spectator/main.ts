@@ -1,5 +1,5 @@
 import './styles.css'
-import { characters } from '../config/characters'
+import { botIdForIndex, characters } from '../config/characters'
 import type {
   FastForwardAnnotation,
   FastForwardClonePayload,
@@ -183,6 +183,9 @@ const moneyCompact = (value: number): string => {
 }
 
 const units = (value: number): string => formatNumber(value, 0)
+
+const countLabel = (count: number, singular: string, plural = `${singular}s`): string =>
+  `${formatNumber(count, 0)} ${count === 1 ? singular : plural}`
 
 const dayOf = (time: number): number => Math.floor(time / 86400) + 1
 
@@ -544,6 +547,7 @@ function renderLiveAll(): void {
   const volume = buildLiveVolumeView(current)
   renderVolumeCard(volume, volume.points.length)
   renderStoryFeed(buildLiveStory())
+  renderBotActivity(eventBuffer)
   renderMerchantCards()
   renderTape()
   renderEventStream()
@@ -1219,6 +1223,121 @@ function renderVolumeCard(view: VolumeView, revealCount: number, force = false):
   $('volume-caption').textContent = volumeCaption(view, revealCount)
 }
 
+/* ------------------------------------------------------------------ bot activity chart */
+
+interface BotActivityRow {
+  id: string
+  name: string
+  trade: number
+  gather: number
+  order: number
+  total: number
+}
+
+const isBotAction = (event: SequencedMarketEvent): boolean =>
+  event.actor.type === 'bot' &&
+  (event.type === 'bot.trade' || event.type === 'bot.gather' || event.type === 'order.fulfilled')
+
+let activeActivitySignature = ''
+
+function buildBotActivityRows(events: readonly SequencedMarketEvent[]): BotActivityRow[] {
+  const rows = new Map<string, BotActivityRow>()
+  for (const event of events) {
+    if (!isBotAction(event)) continue
+    const id = event.actor.id
+    let row = rows.get(id)
+    if (!row) {
+      row = {
+        id,
+        name: event.actor.displayName ?? id,
+        trade: 0,
+        gather: 0,
+        order: 0,
+        total: 0,
+      }
+      rows.set(id, row)
+    }
+    if (event.type === 'bot.trade') row.trade += 1
+    else if (event.type === 'bot.gather') row.gather += 1
+    else row.order += 1
+    row.total += 1
+  }
+  if (rows.size > 0) {
+    characters.forEach((character, index) => {
+      const id = botIdForIndex(index)
+      if (rows.has(id)) return
+      rows.set(id, {
+        id,
+        name: character.displayName,
+        trade: 0,
+        gather: 0,
+        order: 0,
+        total: 0,
+      })
+    })
+  }
+  return [...rows.values()].sort((left, right) => right.total - left.total || left.name.localeCompare(right.name))
+}
+
+function renderBotActivity(events: readonly SequencedMarketEvent[], force = false): void {
+  const relevant = events.filter(isBotAction)
+  const rows = buildBotActivityRows(relevant)
+  const latest = relevant[relevant.length - 1]
+  const signature = `${rows.map(row => `${row.id}:${row.trade}:${row.gather}:${row.order}`).join('|')}|${latest?.id ?? ''}`
+  if (!force && signature === activeActivitySignature) return
+  activeActivitySignature = signature
+
+  const chart = $('activity-chart')
+  const caption = $('activity-caption')
+  const latestEl = $('activity-latest')
+
+  if (rows.length === 0) {
+    chart.innerHTML = '<p class="activity-empty">No bot actions in the feed yet. The townsfolk start trading as the market moves.</p>'
+    caption.textContent = 'No bot actions recorded yet.'
+    latestEl.textContent = 'Waiting for the townsfolk…'
+    latestEl.title = ''
+    return
+  }
+
+  const max = Math.max(...rows.map(row => row.total), 1)
+  const tradeValue = relevant.reduce((sum, event) => {
+    if (event.type !== 'bot.trade') return sum
+    return sum + (event.price ?? 0) * (event.quantity ?? 0)
+  }, 0)
+  const trades = rows.reduce((sum, row) => sum + row.trade, 0)
+  const gathers = rows.reduce((sum, row) => sum + row.gather, 0)
+  const orders = rows.reduce((sum, row) => sum + row.order, 0)
+
+  chart.innerHTML = `<ul class="activity-list">${rows
+    .map(row => {
+      const segment = (count: number, kind: string): string => {
+        if (count === 0) return ''
+        const label =
+          kind === 'order'
+            ? countLabel(count, 'delivery', 'deliveries')
+            : countLabel(count, kind)
+        return `<span class="activity-seg ${kind}" style="width:${((count / max) * 100).toFixed(1)}%" title="${label}"></span>`
+      }
+      return `<li class="activity-row" title="${esc(
+        `${row.name}: ${countLabel(row.trade, 'trade')} · ${countLabel(row.gather, 'gather')} · ${countLabel(row.order, 'delivery', 'deliveries')}`,
+      )}">
+        <span class="activity-name">${esc(row.name)}</span>
+        <span class="activity-track">${segment(row.trade, 'trade')}${segment(row.gather, 'gather')}${segment(row.order, 'order')}</span>
+        <span class="activity-total">${row.total}</span>
+      </li>`
+    })
+    .join('')}</ul>
+    <div class="activity-legend" aria-hidden="true">
+      <span class="activity-legend-item"><i class="activity-swatch trade"></i>${countLabel(trades, 'trade')}</span>
+      <span class="activity-legend-item"><i class="activity-swatch gather"></i>${countLabel(gathers, 'gather')}</span>
+      <span class="activity-legend-item"><i class="activity-swatch order"></i>${countLabel(orders, 'delivery', 'deliveries')}</span>
+    </div>`
+
+  caption.textContent = `${countLabel(relevant.length, 'recorded action')} · ${money0(tradeValue)} moved in bot trades.`
+  latestEl.innerHTML = `<span class="activity-dot" aria-hidden="true"></span>${esc(latest?.message ?? '')}`
+  latestEl.title = latest?.message ?? ''
+}
+
 /* ------------------------------------------------------------------ live story feed */
 
 function buildLiveStory(): StoryItem[] {
@@ -1767,6 +1886,10 @@ function renderWeekFrame(state: WeekRun, simTime: number, complete: boolean, for
   const revealedStory = complete
     ? state.story
     : state.story.filter(item => item.time <= simTime + 1e-6)
+  const revealedActivity = complete
+    ? payload.events ?? []
+    : (payload.events ?? []).filter(event => event.time <= simTime + 1e-6)
+  renderBotActivity(revealedActivity, force)
 
   const changed =
     force ||

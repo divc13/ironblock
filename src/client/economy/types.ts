@@ -71,6 +71,31 @@ export interface MerchantView extends MerchantSummary {
   sellMargin: number
 }
 
+/** One closed trading day, trimmed to the numbers the UI charts. */
+export interface EconomyDaySummary {
+  day: number
+  endedAt: number
+  totalMerchantCash: number
+  totalPlayerCash: number
+  tradeVolume: number
+  tradeValue: number
+  botTrades: number
+  bankruptcies: number
+  caravanArrivals: number
+}
+
+/** Today's running totals, including the cash baseline for the day. */
+export interface EconomyTodaySummary {
+  day: number
+  startedAt: number
+  tradeVolume: number
+  tradeValue: number
+  botTrades: number
+  /** All traveler wallets, matching the metric used by closed-day summaries. */
+  totalPlayerCash: number
+  merchantCashStart: Record<MerchantId, number>
+}
+
 export interface EconomySnapshot {
   day: number
   /** Seconds since the market opened. */
@@ -82,6 +107,10 @@ export interface EconomySnapshot {
   openMerchants: number
   bankruptcies: number
   townHealth: TownHealth
+  /** Closed-day history, oldest first. Empty on the opening day. */
+  summaries: EconomyDaySummary[]
+  /** Today's running totals, so day-one charts still have a pulse. */
+  today: EconomyTodaySummary
   recentEvents: MarketEvent[]
   orderBoardSupported: boolean
 }

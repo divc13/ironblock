@@ -139,16 +139,18 @@
             <p class="chart-caption" id="volume-caption">Waiting for the first day to close…</p>
           </section>
 
-          <section class="card story-card" aria-labelledby="story-title">
+          <section class="card activity-card" aria-labelledby="activity-title">
             <header class="card-head">
               <div>
-                <p class="section-kicker">The human version</p>
-                <h2 id="story-title">What happened</h2>
+                <p class="section-kicker">The economy, acting</p>
+                <h2 id="activity-title">Bot activity</h2>
+                <p class="card-sub">Trades, gathers and deliveries by the eight townsfolk.</p>
               </div>
-              <p class="card-hint">Click a line for the why.</p>
+              <p class="card-hint">Every bar is a recorded action.</p>
             </header>
-            <ol class="story-feed" id="story-feed" aria-live="off"></ol>
-            <p class="empty-note" id="story-empty" hidden>No market events yet. Run a week to see the town in motion.</p>
+            <div class="activity-chart" id="activity-chart" aria-live="off"></div>
+            <p class="activity-latest" id="activity-latest">Waiting for the townsfolk…</p>
+            <p class="chart-caption" id="activity-caption">No bot actions recorded yet.</p>
           </section>
         </div>
 
@@ -170,6 +172,13 @@
             <section class="detail-section" aria-labelledby="townsfolk-heading">
               <h3 id="townsfolk-heading">The eight townsfolk</h3>
               <div class="townsfolk-grid" id="townsfolk-grid"></div>
+            </section>
+
+            <section class="detail-section" aria-labelledby="story-title">
+              <h3 id="story-title">What happened, line by line</h3>
+              <p class="detail-note">Click a line for the why. The activity chart above keeps the live version compact.</p>
+              <ol class="story-feed" id="story-feed" aria-live="off"></ol>
+              <p class="empty-note" id="story-empty" hidden>No market events yet. Run a week to see the town in motion.</p>
             </section>
 
             <section class="detail-section" aria-labelledby="newspaper-heading">

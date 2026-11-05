@@ -317,6 +317,10 @@ function buildSnapshot(
   return {
     state: publicState,
     player: ownPlayer,
+    totalPlayerCash: Object.values(state.players).reduce(
+      (sum, player) => sum + player.cash,
+      0,
+    ),
     merchants: merchantsInStallOrder(config, state.merchants),
     events,
     sequence: state.sequence,

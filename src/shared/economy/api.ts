@@ -21,6 +21,8 @@ export interface EconomySnapshotResponse {
   player: PlayerRuntimeState | null
   /** Merchant runtime states in config stall order. */
   merchants: MerchantRuntimeState[]
+  /** Aggregate cash held by every traveler, without exposing per-player state. */
+  totalPlayerCash: number
   /** Recent retained events, oldest first. */
   events: SequencedMarketEvent[]
   /** Latest world event sequence. */

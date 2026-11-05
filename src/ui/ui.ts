@@ -63,6 +63,12 @@ import {
   type MarketRoute,
   type MarketSide,
 } from './market-board'
+import {
+  renderMarketPriceLadder,
+  renderMerchantCashChart,
+  renderTownCashChart,
+  renderTradeVolumeChart,
+} from './economy-charts'
 
 export interface InteractionPrompt {
   key: string
@@ -100,6 +106,8 @@ interface MountOptions {
   fellBackToMock?: boolean
   /** Called by "Show me" / "Go there" actions so the world can set or clear a waypoint. */
   onNavigate?: (target: GuideTarget | null) => void
+  /** Called once per refresh with market events the overlay has not seen yet. */
+  onLiveEvents?: (events: MarketEvent[]) => void
 }
 
 type PanelSize = 'default' | 'narrow' | 'wide'
@@ -431,10 +439,11 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     className: 'ib-button is-small is-primary',
   })
   guideAction.title = 'Close overlays and show the way to this goal'
-  const guideHelp = button('How to play', () => renderHelp(), {
-    className: 'ib-button is-small is-quiet',
+  const guideHelp = button('?', () => renderHelp(), {
+    className: 'ib-button is-small is-quiet ib-guide-help',
   })
   guideHelp.title = 'Open the full How to Play panel'
+  guideHelp.setAttribute('aria-label', 'How to play')
   guideMeta.append(guideProgressLabel, guideAction, guideHelp)
   const guideWaypoint = $('p', 'ib-guide-waypoint')
   guideWaypoint.hidden = true
@@ -496,6 +505,10 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   let quoteCache: { entries: MarketQuoteEntry[]; at: number } | null = null
   let quoteRequest: Promise<MarketQuoteEntry[]> | null = null
   let marketRenderToken = 0
+  let reportedEventIds = new Set<string>()
+  let liveEventsPrimed = false
+  let refreshInFlight = false
+  let livePollTimer: number | null = null
 
   const QUOTE_CACHE_MS = 15_000
 
@@ -709,6 +722,21 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
   /* ------------------------------- HUD ----------------------------------- */
 
+  const publishLiveEvents = (events: MarketEvent[]): void => {
+    if (!options.onLiveEvents) return
+    const fresh = events.filter(event => !reportedEventIds.has(event.id))
+    for (const event of events) reportedEventIds.add(event.id)
+    if (reportedEventIds.size > 600) {
+      const keep = new Set(events.map(event => event.id))
+      reportedEventIds = new Set([...reportedEventIds].filter(id => keep.has(id)))
+    }
+    if (!liveEventsPrimed) {
+      liveEventsPrimed = true
+      return
+    }
+    if (fresh.length > 0) options.onLiveEvents(fresh)
+  }
+
   const renderHud = (next: EconomySnapshot) => {
     snapshot = next
     cashStat.value.textContent = formatMoney(next.player.cash, economy.currency.symbol)
@@ -737,6 +765,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     townStat.sub.textContent = `Day ${next.day} · ${next.openMerchants}/${next.merchants.length} open`
 
     renderTicker(next.recentEvents)
+    publishLiveEvents(next.recentEvents)
     void renderGuide(next)
     if (activePanelBody) void refreshActivePanel()
   }
@@ -851,6 +880,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     activeKind = null
     activeMerchantId = null
     activePanelBody = null
+    guide.hidden = readFirstDayDismissed()
     hideTooltip()
     if (lastFocused?.isConnected) lastFocused.focus({ preventScroll: true })
     lastFocused = null
@@ -892,6 +922,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     setWireOpen(false)
     if (!lastFocused) lastFocused = document.activeElement as HTMLElement | null
     activeKind = kind
+    guide.hidden = true
     panel.hidden = false
     scrim.hidden = false
     panel.dataset.size = shell.size ?? 'default'
@@ -1352,11 +1383,11 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     snapshot = data
     const token = ++marketRenderToken
     const body = $('div', 'ib-panel-body')
-    body.append($('p', 'ib-muted', 'Reading the latest stall quotes…'))
+    body.append($('p', 'ib-muted', 'Reading prices, tills and trade volume…'))
 
     const shell: PanelShell = {
       title: 'Market Board',
-      subtitle: 'Best bid and ask from every stall, read from the same quotes the counters use.',
+      subtitle: 'Prices, cash and volume at a glance — every number comes from the same stall quotes.',
       size: 'wide',
       body,
     }
@@ -1392,8 +1423,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     body.append(
       $(
         'p',
-        'ib-muted',
-        'Buy where the ask is low, sell where the bid is high. The spread is the gap between the two.',
+        'ib-market-intro',
+        'Ask is what you pay. Bid is what a stall pays you. Charts use the same live quotes as the counters.',
       ),
     )
 
@@ -1404,9 +1435,19 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
     const rows = buildMarketBoard(entries)
     const routes = buildMarketRoutes(entries, rows, 3)
+    const currentMerchantCash = data.merchants.reduce((sum, merchant) => sum + merchant.cash, 0)
+
+    const charts = $('div', 'ib-market-charts')
+    charts.append(
+      renderMarketPriceLadder(rows, entries),
+      renderMerchantCashChart(data.merchants, data.today.merchantCashStart),
+      renderTownCashChart(data.summaries, currentMerchantCash, data.today),
+      renderTradeVolumeChart(data.summaries, data.today),
+    )
+    body.append(charts)
 
     if (routes.length > 0) {
-      body.append($('h3', 'ib-market-heading', 'Best deals now'))
+      body.append($('h3', 'ib-market-heading', 'Best moves now'))
       const dealGrid = $('div', 'ib-deal-grid')
       for (const route of routes) {
         dealGrid.append(marketDealCard(route))
@@ -1414,7 +1455,6 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       body.append(dealGrid)
     }
 
-    body.append($('h3', 'ib-market-heading', 'Every tradable item'))
     const scroll = $('div', 'ib-market-scroll')
     const table = $('table', 'ib-table ib-market-table')
     const thead = $('thead')
@@ -1461,7 +1501,18 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
     table.append(thead, tbody)
     scroll.append(table)
-    body.append(scroll)
+
+    const details = $('details', 'ib-market-table-details')
+    const detailsSummary = $('summary')
+    const detailsCopy = $('span', 'ib-market-table-copy')
+    detailsCopy.append(
+      $('strong', undefined, 'Full quote table'),
+      $('small', undefined, `${rows.length} items · ${entries.length} live quotes`),
+    )
+    detailsSummary.append(detailsCopy, $('span', 'ib-market-table-chevron', '+'))
+    details.append(detailsSummary, scroll)
+    body.append(details)
+
     body.append(
       $(
         'p',
@@ -1631,27 +1682,41 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     craftHeading.style.fontFamily = 'var(--ib-serif)'
     body.append(craftHeading, $('p', 'ib-muted', 'Recipes run instantly. Inputs are consumed and stamina is spent.'))
 
-    const recipeGrid = $('div', 'ib-grid cols-2')
+    const recipeGrid = $('div', 'ib-recipe-grid')
     for (const recipe of Object.values(economy.recipes)) {
-      const card = $('div', 'ib-card')
-      const title = $('h3', undefined, recipe.displayName)
-      card.append(title)
-      const inputs = Object.entries(recipe.inputs)
-        .map(([itemId, need]) => {
-          const have = player.inventory.find(line => line.itemId === itemId)?.quantity ?? 0
-          return `${need}× ${itemName(itemId)} (${have})`
-        })
-        .join(' · ')
-      card.append($('p', 'ib-muted', inputs))
+      const card = $('div', 'ib-recipe')
       const outputs = Object.entries(recipe.outputs)
         .map(([itemId, count]) => `${count}× ${itemName(itemId)}`)
         .join(', ')
-      card.append($('p', undefined, `→ ${outputs} · stamina −${recipe.staminaCost}`))
-      const missing = Object.entries(recipe.inputs).some(
-        ([itemId, need]) => (player.inventory.find(line => line.itemId === itemId)?.quantity ?? 0) < need,
+      const head = $('div', 'ib-recipe-head')
+      head.append(
+        $('strong', 'ib-recipe-title', recipe.displayName),
+        $('span', 'ib-recipe-output', `→ ${outputs}`),
       )
+      card.append(head)
+
+      const inputs = $('div', 'ib-recipe-inputs')
+      let missing = false
+      for (const [itemId, need] of Object.entries(recipe.inputs)) {
+        const have = player.inventory.find(line => line.itemId === itemId)?.quantity ?? 0
+        const short = have < need
+        missing = missing || short
+        const chip = $('span', `ib-recipe-input${short ? ' is-missing' : ''}`)
+        chip.append(
+          $('b', undefined, `${have}/${need}`),
+          document.createTextNode(` ${itemName(itemId)}`),
+        )
+        chip.title = short
+          ? `Need ${need} ${itemName(itemId)}, you have ${have}`
+          : `${have} ${itemName(itemId)} ready`
+        inputs.append(chip)
+      }
+      card.append(inputs, $('span', 'ib-recipe-meta', `${recipe.staminaCost} stamina`))
+
+      const tired = player.stamina < recipe.staminaCost
+      const label = missing ? 'Missing inputs' : tired ? 'Rest first' : 'Craft'
       const craft = button(
-        missing ? 'Missing inputs' : `Craft ${recipe.displayName}`,
+        label,
         async () => {
           if (busy) return
           busy = true
@@ -1661,7 +1726,15 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
           await ui.refresh()
           await renderInventory()
         },
-        { className: 'ib-button is-small', disabled: missing || player.stamina < recipe.staminaCost },
+        {
+          className: 'ib-button is-small is-primary',
+          disabled: missing || tired,
+          title: missing
+            ? `Missing inputs for ${recipe.displayName}`
+            : tired
+              ? `Need ${recipe.staminaCost} stamina`
+              : `Craft ${recipe.displayName}`,
+        },
       )
       card.append(craft)
       recipeGrid.append(card)
@@ -2377,7 +2450,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   /* -------------------------------- api ---------------------------------- */
 
   const refresh = async (): Promise<void> => {
-    if (destroyed) return
+    if (destroyed || refreshInFlight) return
+    refreshInFlight = true
     try {
       const next = await client.getSnapshot()
       renderHud(next)
@@ -2396,12 +2470,29 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
         }`
         banner.hidden = false
       }
+    } finally {
+      refreshInFlight = false
     }
   }
 
   const unsubscribe = client.subscribe(() => {
     void refresh()
   })
+
+  // Keep the HUD and actor bubbles moving without disturbing an open panel.
+  livePollTimer = window.setInterval(() => {
+    if (
+      destroyed ||
+      refreshInFlight ||
+      busy ||
+      document.hidden ||
+      !panel.hidden ||
+      !withdrawOverlay.hidden
+    ) {
+      return
+    }
+    void refresh()
+  }, 4_000)
 
   fastForwardHudUnsub = client.fastForward.onChange(applyFastForwardHud)
   applyFastForwardHud(client.fastForward.getState())
@@ -2479,6 +2570,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       scrim.removeEventListener('click', onScrimClick)
       withdrawOverlay.removeEventListener('click', onWithdrawOverlayClick)
       if (weekCompleteTimer !== null) window.clearTimeout(weekCompleteTimer)
+      if (livePollTimer !== null) window.clearInterval(livePollTimer)
       closeWithdraw()
       fastForwardUnsub?.()
       fastForwardHudUnsub?.()

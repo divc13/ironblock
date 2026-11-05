@@ -3,12 +3,14 @@ import { createEconomyRuntime } from '../../client/economy'
 import { HttpEconomyClient } from '../../client/economy/http'
 import { readNearAuthSession } from '../../client/auth/near-auth'
 import { resolveWorldSpritesheet } from '../../client/world-sprites'
+import { charactersWithMap } from '../../config/characters'
 import { economy } from '../../config/economy'
 import {
   merchantIdFromEventName,
   resourceArea,
   resourceSpecFromEventName,
   stallPositionForSlot,
+  townsfolkEventName,
   world,
 } from '../../config/world'
 import { mountIronblockUI, type IronblockUI } from '../../ui/ui'
@@ -18,7 +20,7 @@ import {
   type GuideTarget,
   type GuideWaypoint,
 } from '../../ui/guide'
-import type { ResourceNodeConfig } from '../../shared/types'
+import type { MarketEvent, ResourceNodeConfig } from '../../shared/types'
 
 /**
  * Client bridge between the RPGJS scene and the HTML overlay.
@@ -41,6 +43,152 @@ let lastPromptKey = ''
 let mountedClient: ReturnType<typeof createEconomyRuntime>['client'] | null = null
 let activeEngine: RpgClientEngine | null = null
 let guideTarget: GuideTarget | null = null
+
+const botActorIds = new Set(charactersWithMap().map(character => character.id))
+interface ActorBubble {
+  element: HTMLDivElement
+  until: number
+}
+const actorBubbles = new Map<string, ActorBubble>()
+let actorBubbleLayer: HTMLDivElement | null = null
+let actorBubbleFrame: number | null = null
+
+type BubbleTone = 'buy' | 'sell' | 'gather' | 'order' | 'trade'
+
+function actorBubbleLayerElement(): HTMLDivElement | null {
+  if (actorBubbleLayer?.isConnected) return actorBubbleLayer
+  const root = document.getElementById('ironblock-ui')
+  if (!root) return null
+  const layer = document.createElement('div')
+  layer.className = 'ib-actor-layer'
+  layer.setAttribute('aria-hidden', 'true')
+  root.append(layer)
+  actorBubbleLayer = layer
+  return layer
+}
+
+function actorScreenPoint(botId: string): { x: number; y: number } | null {
+  const engine = activeEngine
+  if (!engine) return null
+  try {
+    const map = engine.scene
+    const event = map?.events?.()[townsfolkEventName(botId)]
+    if (!event) return null
+    const x = event.x()
+    const y = event.y()
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+    const viewport = (engine as unknown as {
+      findViewportInstance?: () => { toScreen?: (x: number, y: number) => { x: number; y: number } }
+    }).findViewportInstance?.()
+    if (!viewport || typeof viewport.toScreen !== 'function') return null
+    const point = viewport.toScreen(x, y)
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null
+    const canvas = document.querySelector('canvas')
+    const rect = canvas?.getBoundingClientRect()
+    return {
+      x: point.x + (rect?.left ?? 0),
+      y: point.y + (rect?.top ?? 0),
+    }
+  } catch {
+    return null
+  }
+}
+
+function positionActorBubbles(): void {
+  const now = Date.now()
+  for (const [botId, bubble] of [...actorBubbles]) {
+    if (!bubble.element.isConnected || now >= bubble.until) {
+      bubble.element.remove()
+      actorBubbles.delete(botId)
+      continue
+    }
+    const point = actorScreenPoint(botId)
+    if (!point) {
+      bubble.element.hidden = true
+      continue
+    }
+    bubble.element.hidden = false
+    bubble.element.style.left = `${Math.round(point.x)}px`
+    bubble.element.style.top = `${Math.round(point.y - 58)}px`
+  }
+}
+
+function ensureActorBubbleLoop(): void {
+  if (actorBubbleFrame !== null) return
+  const frame = () => {
+    actorBubbleFrame = null
+    positionActorBubbles()
+    if (actorBubbles.size > 0) {
+      actorBubbleFrame = window.requestAnimationFrame(frame)
+    }
+  }
+  actorBubbleFrame = window.requestAnimationFrame(frame)
+}
+
+function showActorBubble(botId: string, text: string, tone: BubbleTone, title: string): void {
+  const layer = actorBubbleLayerElement()
+  if (!layer) return
+  const existing = actorBubbles.get(botId)
+  if (existing) {
+    existing.element.remove()
+    actorBubbles.delete(botId)
+  }
+  const element = document.createElement('div')
+  element.className = 'ib-actor-bubble'
+  element.dataset.tone = tone
+  element.textContent = text
+  element.title = title
+  layer.append(element)
+  actorBubbles.set(botId, { element, until: Date.now() + 6_000 })
+  ensureActorBubbleLoop()
+}
+
+function botActivityCopy(event: MarketEvent): { text: string; tone: BubbleTone } | null {
+  if (event.type !== 'bot.trade' && event.type !== 'bot.gather' && event.type !== 'order.fulfilled') {
+    return null
+  }
+  const actor = event.actor.displayName ?? event.actor.id
+  const message = event.message.replace(/\s+/g, ' ').trim().replace(/\.$/, '')
+  const body = message.startsWith(actor) ? message.slice(actor.length).trim() : message
+
+  if (event.type === 'bot.trade') {
+    const match = /^(bought|sold)\s+([\d,.]+)\s+(.+?)\s+(?:from|to)\s+.+?\s+for\s+(.+)$/i.exec(body)
+    if (match) {
+      const bought = match[1].toLowerCase() === 'bought'
+      return {
+        text: `${bought ? 'Bought' : 'Sold'} ${match[2]} ${match[3]} · ${bought ? '−' : '+'}${match[4]}`,
+        tone: bought ? 'buy' : 'sell',
+      }
+    }
+    return { text: body, tone: 'trade' }
+  }
+
+  if (event.type === 'bot.gather') {
+    const match = /gathered\s+([\d,.]+)\s+(.+)$/i.exec(body)
+    return {
+      text: match ? `Gathered ${match[1]} ${match[2]}` : body,
+      tone: 'gather',
+    }
+  }
+
+  const match = /delivered\s+([\d,.]+)\s+(.+?)\s+to\s+.+?(?:\s+for\s+(.+))?$/i.exec(body)
+  return {
+    text: match
+      ? `Delivered ${match[1]} ${match[2]}${match[3] ? ` · +${match[3]}` : ''}`
+      : body,
+    tone: 'order',
+  }
+}
+
+/** Show one live economic action over the bot that performed it. */
+function showLiveBotActions(events: readonly MarketEvent[]): void {
+  for (const event of [...events].reverse()) {
+    if (!botActorIds.has(event.actor.id)) continue
+    const copy = botActivityCopy(event)
+    if (!copy) continue
+    showActorBubble(event.actor.id, copy.text, copy.tone, event.message)
+  }
+}
 
 const merchantLookup = economy.merchants as Record<
   string,
@@ -231,6 +379,9 @@ export default defineModule<RpgClient>({
         onNavigate: target => {
           guideTarget = target
           updateWaypoint()
+        },
+        onLiveEvents: events => {
+          showLiveBotActions(events)
         },
       })
 

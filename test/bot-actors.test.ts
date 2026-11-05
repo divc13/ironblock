@@ -221,13 +221,13 @@ test('registered bot actors walk to activity, work, return and patrol', () => {
     assert.equal(snapshot.phase, 'working')
     assert.ok(fake.stopCalls() > 0, 'arrival stops the moveTo behavior')
 
-    tickBotActors(3_000)
+    tickBotActors(3_600)
     ;[snapshot] = botActorSnapshot()
     assert.equal(snapshot.phase, 'returning')
     assert.deepEqual(fake.lastMove(), { x: home.x, y: home.y })
 
     fake.setPosition(home.x, home.y)
-    tickBotActors(3_100)
+    tickBotActors(3_700)
     ;[snapshot] = botActorSnapshot()
     assert.equal(snapshot.phase, 'idle')
 
