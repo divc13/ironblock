@@ -527,6 +527,15 @@ test('seven-day fast-forward is deterministic, fast and returns a compact series
   assert.deepEqual(first.snapshot(), second.snapshot())
   assert.ok(firstRun.events.some(event => event.type === 'system.fast-forward'))
   assert.ok(firstRun.events.length <= config.reporting.eventSampleSize)
+  const window = firstRun.toTime - firstRun.fromTime
+  const sampled = firstRun.events.filter(
+    event => event.type !== 'system.fast-forward',
+  )
+  assert.ok(sampled.length > 0, 'the sample keeps regular market events')
+  assert.ok(
+    sampled[0].time - firstRun.fromTime < window * 0.25,
+    'the sample starts near the beginning of the week instead of its last day',
+  )
 })
 
 test('snapshot and spectator snapshot are serializable and stable', () => {

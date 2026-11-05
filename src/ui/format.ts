@@ -187,6 +187,23 @@ export function explainQuote(quote: Quote, itemName: string): string {
   return limitNotes.length > 0 ? `${base} (${limitNotes.join(', ')})` : base
 }
 
+/**
+ * Plain-language follow-up after a trade. It reports the merchant's new stock
+ * and the usual direction of the next quote without claiming to predict it.
+ */
+export function tradeFollowUp(input: {
+  side: 'buy' | 'sell'
+  merchantName: string
+  itemName: string
+  stockAfter: number
+}): string {
+  const stock = `${formatNumber(input.stockAfter)} ${input.itemName}`
+  if (input.side === 'sell') {
+    return `${input.merchantName} now holds ${stock}. More stock usually softens the next bid.`
+  }
+  return `${input.merchantName} now holds ${stock}. Tighter stock can lift the next ask.`
+}
+
 const EVENT_TYPE_LABELS: Record<string, string> = {
   'trade.buy': 'Purchase',
   'trade.sell': 'Sale',
@@ -227,6 +244,42 @@ const eventTone = (event: MarketEvent): EventLine['tone'] => {
       return 'warn'
     default:
       return 'neutral'
+  }
+}
+
+/**
+ * One-line live presence copy. Uses the event's own message (which already
+ * names the merchant) and adds a concrete "what changed" cue from the before /
+ * after snapshot rather than inventing commentary.
+ */
+export function describeLiveEvent(event: MarketEvent, itemName?: string): EventLine {
+  const actor = event.actor.displayName ?? event.actor.id
+  const message = event.message.replace(/\s*\.\s*$/, '')
+  const changes: string[] = []
+  if (event.before.bid !== null && event.after.bid !== null) {
+    const delta = event.after.bid - event.before.bid
+    if (Math.abs(delta) >= 0.005) {
+      changes.push(`bid ${delta > 0 ? 'higher' : 'lower'} now`)
+    }
+  }
+  if (event.before.ask !== null && event.after.ask !== null) {
+    const delta = event.after.ask - event.before.ask
+    if (Math.abs(delta) >= 0.005) {
+      changes.push(`ask ${delta > 0 ? 'higher' : 'lower'} now`)
+    }
+  }
+  if (changes.length === 0 && event.before.stock !== null && event.after.stock !== null) {
+    const delta = event.after.stock - event.before.stock
+    if (delta < 0) changes.push('stock is tighter now')
+    else if (delta > 0) changes.push('stock is deeper now')
+  }
+
+  const headline = changes.length > 0 ? `${message} · ${changes.join(' · ')}` : message
+  return {
+    actor,
+    headline,
+    detail: itemName ?? '',
+    tone: eventTone(event),
   }
 }
 

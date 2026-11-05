@@ -1,4 +1,4 @@
-import { defineModule, type RpgClient } from '@rpgjs/client'
+import { defineModule, type RpgClient, type RpgClientEngine } from '@rpgjs/client'
 import { createEconomyRuntime } from '../../client/economy'
 import { HttpEconomyClient } from '../../client/economy/http'
 import { readNearAuthSession } from '../../client/auth/near-auth'
@@ -6,10 +6,18 @@ import { resolveWorldSpritesheet } from '../../client/world-sprites'
 import { economy } from '../../config/economy'
 import {
   merchantIdFromEventName,
+  resourceArea,
   resourceSpecFromEventName,
+  stallPositionForSlot,
   world,
 } from '../../config/world'
 import { mountIronblockUI, type IronblockUI } from '../../ui/ui'
+import {
+  compassDirection,
+  distanceInPaces,
+  type GuideTarget,
+  type GuideWaypoint,
+} from '../../ui/guide'
 import type { ResourceNodeConfig } from '../../shared/types'
 
 /**
@@ -31,12 +39,53 @@ let lastScanAt = 0
 let nearby: InteractionTarget | null = null
 let lastPromptKey = ''
 let mountedClient: ReturnType<typeof createEconomyRuntime>['client'] | null = null
+let activeEngine: RpgClientEngine | null = null
+let guideTarget: GuideTarget | null = null
 
 const merchantLookup = economy.merchants as Record<
   string,
   (typeof economy.merchants)[keyof typeof economy.merchants] | undefined
 >
 const resourceLookup = economy.resources.nodes as Record<string, ResourceNodeConfig | undefined>
+
+const waypointFor = (
+  engine: RpgClientEngine,
+  target: GuideTarget,
+): GuideWaypoint | null => {
+  const map = engine.scene
+  const player = engine.getCurrentPlayer() ?? map?.getCurrentPlayer()
+  if (!map || !player) return null
+
+  let point: { x: number; y: number } | null = null
+  if (target.kind === 'merchant') {
+    const merchant = merchantLookup[target.id]
+    if (merchant) point = stallPositionForSlot(merchant.stallSlot)
+  } else {
+    const area = resourceArea(target.id)
+    if (area) point = { x: area.x, y: area.y }
+  }
+  if (!point) return null
+
+  const dx = point.x - player.x()
+  const dy = point.y - player.y()
+  const distancePx = Math.hypot(dx, dy)
+  return {
+    targetId: target.id,
+    label: target.label,
+    direction: compassDirection(dx, dy),
+    distance: distanceInPaces(distancePx),
+    arrived: distancePx <= world.interactionRadius,
+  }
+}
+
+const updateWaypoint = (): void => {
+  if (!ui) return
+  if (!guideTarget || !activeEngine) {
+    ui.setWaypoint(null)
+    return
+  }
+  ui.setWaypoint(waypointFor(activeEngine, guideTarget))
+}
 
 const promptFor = (target: InteractionTarget): { key: string; label: string; hint: string } => {
   if (target.kind === 'merchant') {
@@ -56,16 +105,19 @@ const promptFor = (target: InteractionTarget): { key: string; label: string; hin
   }
 }
 
-const scanNearby = (engine: import('@rpgjs/client').RpgClientEngine): void => {
+const scanNearby = (engine: RpgClientEngine): void => {
+  activeEngine = engine
   const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
   if (now - lastScanAt < 90) return
   lastScanAt = now
+  updateWaypoint()
   if (!ui) return
 
-  if (ui.isPanelOpen()) {
-    if (nearby) {
+  if (ui.isPanelOpen() || ui.isFastForwarding()) {
+    if (nearby || lastPromptKey !== '') {
       ui.setPrompt(null)
       lastPromptKey = ''
+      nearby = null
     }
     return
   }
@@ -122,7 +174,7 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
 }
 
 const interact = async (): Promise<void> => {
-  if (!ui || !nearby || !mountedClient) return
+  if (!ui || !nearby || !mountedClient || ui.isFastForwarding()) return
   const target = nearby
   if (target.kind === 'merchant') {
     await ui.openMerchant(target.merchantId)
@@ -135,7 +187,7 @@ const interact = async (): Promise<void> => {
 
 const onActionKey = (event: KeyboardEvent): void => {
   if (event.defaultPrevented || event.repeat) return
-  if (!ui || ui.isPanelOpen() || !nearby) return
+  if (!ui || ui.isPanelOpen() || ui.isFastForwarding() || !nearby) return
   if (isTypingTarget(event.target)) return
   if (event.code !== 'KeyE' && event.code !== 'Space' && event.code !== 'Enter') return
   event.preventDefault()
@@ -159,6 +211,7 @@ export default defineModule<RpgClient>({
         return true
       }
 
+      activeEngine = engine
       const session = readNearAuthSession()
       const serverClient = session
         ? new HttpEconomyClient({ sessionToken: session.sessionToken })
@@ -175,6 +228,10 @@ export default defineModule<RpgClient>({
         client: runtime.client,
         note: runtime.note,
         fellBackToMock: runtime.fellBackToMock,
+        onNavigate: target => {
+          guideTarget = target
+          updateWaypoint()
+        },
       })
 
       window.addEventListener('keydown', onActionKey, true)

@@ -1,13 +1,13 @@
 import type { FastForwardAnnotation, SequencedMarketEvent } from '../server/observability'
 
 /**
- * Timeline playback for the deterministic fast-forward payload.
+ * A single paced timeline for the deterministic fast-forward payload.
  *
- * The clone result contains a fixed event sample plus causal annotations, both
- * stamped with simulated world time. Playback reveals them over ~60 wall
- * seconds in world-time order, with pause/resume, single-step, speed control
- * and skip-to-end. `prefers-reduced-motion` changes nothing functionally — the
- * caller removes animated effects for it.
+ * The clone payload contains an event sample plus causal annotations. Events
+ * and annotations are revealed in simulated-time order over one short wall
+ * clock run (7 seconds by default). The page paints its day counter, summary,
+ * chart and story feed from the same `simTime`, so they all move together.
+ * `skipToEnd` reveals the remaining beats and finishes immediately.
  */
 
 export interface PlaybackItem {
@@ -19,15 +19,14 @@ export interface PlaybackItem {
 }
 
 export interface PlaybackProgress {
-  phase: 'running' | 'paused' | 'done'
+  phase: 'running' | 'done'
   index: number
   total: number
   simTime: number
   fromTime: number
   toTime: number
-  /** 0..100, simulated day progress. */
+  /** 0..100, based on smooth simulated time rather than the last beat. */
   percent: number
-  speed: number
 }
 
 export interface PlaybackCallbacks {
@@ -37,20 +36,19 @@ export interface PlaybackCallbacks {
 }
 
 export interface PlaybackOptions {
-  /** Wall-clock seconds for the full run. Default 60 (config durationSeconds). */
+  /** Wall-clock seconds for the full run. Clamped to 4–30. Default 7. */
   wallSeconds?: number
 }
 
 export class FastForwardPlayback {
-  private items: PlaybackItem[]
+  private readonly items: PlaybackItem[]
+  private readonly wallSeconds: number
   private pointer = 0
-  private _phase: 'running' | 'paused' | 'done' = 'paused'
-  private speed = 1
+  private phaseState: 'idle' | 'running' | 'done' = 'idle'
   private wallElapsed = 0
   private lastFrame: number | null = null
   private raf: number | null = null
   private destroyed = false
-  private readonly wallSeconds: number
 
   constructor(
     private readonly payload: {
@@ -62,7 +60,7 @@ export class FastForwardPlayback {
     private readonly callbacks: PlaybackCallbacks,
     options: PlaybackOptions = {},
   ) {
-    this.wallSeconds = Math.min(120, Math.max(20, options.wallSeconds ?? 60))
+    this.wallSeconds = Math.min(30, Math.max(4, options.wallSeconds ?? 7))
     this.items = [
       ...payload.events.map(event => ({
         kind: 'event' as const,
@@ -76,69 +74,27 @@ export class FastForwardPlayback {
         sequence: annotation.eventId ? annotation.sequence : Number.MAX_SAFE_INTEGER,
         annotation,
       })),
-    ]
-      .sort((left, right) => left.time - right.time || left.sequence - right.sequence)
+    ].sort((left, right) => left.time - right.time || left.sequence - right.sequence)
   }
 
-  /** Administrative: total beats in the timeline. */
   get total(): number {
     return this.items.length
   }
 
+  get phase(): 'idle' | 'running' | 'done' {
+    return this.phaseState
+  }
+
   start(): void {
-    this._phase = 'running'
+    if (this.destroyed || this.phaseState !== 'idle') return
+    this.phaseState = 'running'
     this.lastFrame = null
     this.emitProgress()
-    this.loop(performance.now())
-  }
-
-  play(): void {
-    if (this._phase === 'running' || this.destroyed) return
-    if (this._phase === 'done') return
-    this._phase = 'running'
-    this.lastFrame = null
-    this.emitProgress()
-    if (this.raf === null) this.loop(performance.now())
-  }
-
-  pause(): void {
-    if (this._phase === 'running') {
-      this._phase = 'paused'
-      this.emitProgress()
-    }
-  }
-
-  /** Reveal the next beat regardless of pause state. */
-  step(): void {
-    if (this._phase === 'done') return
-    const item = this.items[this.pointer]
-    if (!item) {
-      this.finish()
-      return
-    }
-    this.revealAt(this.pointer)
-    this.pointer += 1
-    if (this.pointer >= this.items.length) {
-      this.finish()
-      return
-    }
-    this.emitProgress()
-  }
-
-  setSpeed(multiplier: number): void {
-    this.speed = Math.max(0.5, Math.min(8, multiplier))
-    this.emitProgress()
-  }
-
-  get currentSpeed(): number {
-    return this.speed
-  }
-
-  get phase(): 'running' | 'paused' | 'done' {
-    return this._phase
+    this.raf = requestAnimationFrame(this.loop)
   }
 
   skipToEnd(): void {
+    if (this.destroyed || this.phaseState === 'done') return
     while (this.pointer < this.items.length) {
       this.revealAt(this.pointer)
       this.pointer += 1
@@ -161,61 +117,60 @@ export class FastForwardPlayback {
   }
 
   private simNow(): number {
-    const span = Math.max(1, this.payload.toTime - this.payload.fromTime)
+    const from = this.payload.fromTime
+    const to = this.payload.toTime
+    const span = Math.max(1, to - from)
     const progress = Math.min(1, this.wallElapsed / this.wallSeconds)
-    return this.payload.fromTime + progress * span
+    return from + progress * span
   }
 
   private emitProgress(): void {
-    const span = Math.max(1, this.payload.toTime - this.payload.fromTime)
-    const sim = this.simNow()
-    const current = this.items[Math.min(this.pointer, this.items.length - 1)]
-    const simThroughCurrent = current ? current.time : this.payload.toTime
+    const from = this.payload.fromTime
+    const to = this.payload.toTime
+    const simTime = this.phaseState === 'done' ? to : this.simNow()
     const percent =
-      Math.max(0, Math.min(100, ((simThroughCurrent - this.payload.fromTime) / span) * 100))
+      this.phaseState === 'done'
+        ? 100
+        : Math.max(0, Math.min(100, ((simTime - from) / Math.max(1, to - from)) * 100))
     this.callbacks.onProgress({
-      phase: this._phase,
+      phase: this.phaseState === 'done' ? 'done' : 'running',
       index: this.pointer,
       total: this.items.length,
-      simTime: sim,
-      fromTime: this.payload.fromTime,
-      toTime: this.payload.toTime,
+      simTime,
+      fromTime: from,
+      toTime: to,
       percent,
-      speed: this.speed,
     })
   }
 
   private finish(): void {
-    this._phase = 'done'
+    if (this.phaseState === 'done') return
+    this.phaseState = 'done'
     if (this.raf !== null) {
       cancelAnimationFrame(this.raf)
       this.raf = null
     }
+    this.lastFrame = null
     this.emitProgress()
     this.callbacks.onDone()
   }
 
   private loop = (frame: number): void => {
-    if (this.destroyed) return
-    if (this._phase !== 'running') {
-      this.raf = null
-      return
-    }
+    this.raf = null
+    if (this.destroyed || this.phaseState !== 'running') return
     if (this.lastFrame !== null) {
-      const deltaSeconds = (frame - this.lastFrame) / 1000
-      this.wallElapsed += deltaSeconds * this.speed
+      this.wallElapsed += (frame - this.lastFrame) / 1000
     }
     this.lastFrame = frame
 
-    const sim = this.simNow()
-    while (this.pointer < this.items.length && this.items[this.pointer].time <= sim) {
+    const simTime = this.simNow()
+    while (this.pointer < this.items.length && this.items[this.pointer].time <= simTime) {
       this.revealAt(this.pointer)
       this.pointer += 1
     }
 
-    if (this.wallElapsed >= this.wallSeconds || this.pointer >= this.items.length) {
-      // Reveal everything that belongs to the simulated window, then finish.
-      while (this.pointer < this.items.length && this.items[this.pointer].time <= this.payload.toTime + 1e-9) {
+    if (this.wallElapsed >= this.wallSeconds) {
+      while (this.pointer < this.items.length) {
         this.revealAt(this.pointer)
         this.pointer += 1
       }

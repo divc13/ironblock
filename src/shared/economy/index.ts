@@ -1,4 +1,5 @@
 export * from './types'
 export * from './engine'
+export * from './fast-forward'
 export * from './fingerprint'
 export * from './rng'

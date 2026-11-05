@@ -27,6 +27,7 @@ import { loadServerAuthConfig, type ServerAuthConfig } from "../auth/config";
 import { AuthError } from "../auth/errors";
 import { defaultAuthStore, verifyActiveGameSession } from "../auth/service";
 import { InMemoryAuthStore } from "../auth/store";
+import { startBotPlayback } from "./bot-playback";
 import { getEconomyServiceOrNull, startEconomyService } from "./runtime";
 import type { EconomyService } from "./service";
 
@@ -564,6 +565,13 @@ async function fastForward(
       : readDays(daysValue, service.config);
   const result = await service.fastForward(days);
   if (!result.success) throw engineError(result.error);
+  // Presentation only: walk the visible server-authoritative bots across the
+  // same accelerated window the initiating client is revealing. A new run
+  // cancels any previous playback inside startBotPlayback.
+  startBotPlayback(result.events, {
+    fromTime: result.fromTime,
+    toTime: result.toTime,
+  });
   return result;
 }
 

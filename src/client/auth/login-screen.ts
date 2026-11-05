@@ -116,6 +116,32 @@ const STYLES = `
   animation: ib-auth-spin 700ms linear infinite;
   vertical-align: -1px;
 }
+.ib-auth__watch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  margin: 14px 0 0;
+  padding: 11px 16px;
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.08);
+  color: #fcd34d;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.ib-auth__watch:hover {
+  transform: translateY(-1px);
+  border-color: #fcd34d;
+  background: rgba(251, 191, 36, 0.16);
+}
+.ib-auth__watch:focus-visible {
+  outline: 2px solid #fbbf24;
+  outline-offset: 2px;
+}
 .ib-auth__fine {
   margin: 16px 0 0;
   padding-top: 16px;
@@ -127,7 +153,7 @@ const STYLES = `
 @keyframes ib-auth-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .ib-auth__status[data-kind="busy"]::before { animation: none; }
-  .ib-auth__button { transition: none; }
+  .ib-auth__button, .ib-auth__watch { transition: none; }
 }
 @media (max-width: 480px) {
   .ib-auth__panel { padding: 28px 22px 22px; }
@@ -140,6 +166,10 @@ const STYLES = `
  */
 export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
   installStyles();
+
+  const env = (import.meta as ImportMeta & { env?: { BASE_URL?: string } }).env;
+  const baseUrl = env?.BASE_URL || "/";
+  const spectatorHref = `${baseUrl.replace(/\/$/, "")}/spectator`;
 
   const root = document.createElement("div");
   root.className = "ib-auth";
@@ -161,6 +191,9 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
         Continue with email
       </button>
       <div class="ib-auth__status" role="status" aria-live="polite"></div>
+      <a class="ib-auth__watch" href="${spectatorHref}" target="_blank" rel="noopener noreferrer" aria-label="Watch the live market without signing in">
+        Watch the live market <span aria-hidden="true">↗</span>
+      </a>
       <p class="ib-auth__fine">
         Testnet only. Your NEAR key is derived by the MPC network; this app
         never receives a private key.

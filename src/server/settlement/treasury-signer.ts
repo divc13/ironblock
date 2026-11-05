@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { KeyPair } from "near-api-js";
+import { KeyPair, keyStores } from "near-api-js";
 import { loadSettlementConfig, type SettlementConfig } from "./config";
 
 /**

@@ -1,5 +1,5 @@
 import type { EconomyActionResult, TickActionData } from '../../shared/economy'
-import { applyBotActivityEvents } from './bot-actors'
+import { applyLiveBotActivityEvents } from './bot-playback'
 import type { EconomyService } from './service'
 
 /** Real-time cadence when `IRONBLOCK_LIVE_TICK_MS` is unset. */
@@ -214,10 +214,10 @@ export class LiveEconomyLoop {
   private async performTick(): Promise<LiveEconomyTickResult> {
     const result = await this.service.tickLive(this.tickSeconds)
     if (result.success) {
-      // Presentation only: bridge the authoritative events to the visible map
-      // actors. Fast-forward deliberately bypasses this; it should not animate
-      // thousands of historical actions.
-      applyBotActivityEvents(result.events)
+      // Presentation only: bridge the authoritative live events to the visible
+      // map actors. While a fast-forward playback is driving the same actors,
+      // the live source is suppressed so the two drivers cannot fight.
+      applyLiveBotActivityEvents(result.events)
       await this.persistIfDue()
     }
     return result

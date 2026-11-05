@@ -1292,9 +1292,16 @@ export class MockFastForwardClient implements FastForwardClient {
     events: [],
     recap: null,
     message: 'Ready to simulate a week of town trade.',
+    fromTime: 0,
+    toTime: 0,
+    startDay: 1,
+    endDay: 1,
+    revealDurationMs: 0,
+    worldPlayback: 'unavailable',
   }
   private readonly listeners = new Set<(state: FastForwardState) => void>()
   private paused = false
+  private skipped = false
   private runId = 0
   private running = false
 
@@ -1333,7 +1340,11 @@ export class MockFastForwardClient implements FastForwardClient {
     if (this.running) this.stop()
     this.runId += 1
     this.paused = false
+    this.skipped = false
     this.running = true
+    const start = await this.owner.getSnapshot()
+    const startDay = start.day
+    const fromTime = start.time
     this.state = {
       status: 'running',
       day: 0,
@@ -1343,18 +1354,30 @@ export class MockFastForwardClient implements FastForwardClient {
       events: [],
       recap: this.state.recap,
       message: `Simulating ${totalDays} days of market trade…`,
+      fromTime,
+      toTime: fromTime + totalDays * DAY_SECONDS,
+      startDay,
+      endDay: startDay + totalDays,
+      revealDurationMs:
+        this.paceMs > 0 ? totalDays * this.paceMs : 0,
+      worldPlayback: 'unavailable',
     }
     this.notify()
 
-    await this.run(totalDays, this.runId)
+    await this.run(totalDays, this.runId, startDay)
     return this.getState()
   }
 
-  private async run(totalDays: number, runId: number): Promise<void> {
+  private async run(
+    totalDays: number,
+    runId: number,
+    startDay: number,
+  ): Promise<void> {
     for (let day = 1; day <= totalDays; day += 1) {
       await this.waitWhilePaused(runId)
       if (runId !== this.runId) return
-      const dayState = await this.owner.simulateDay(day, runId)
+      const absoluteDay = startDay + day - 1
+      const dayState = await this.owner.simulateDay(absoluteDay, runId)
       if (runId !== this.runId) return
 
       const newEvents = await this.owner.getEvents()
@@ -1363,7 +1386,7 @@ export class MockFastForwardClient implements FastForwardClient {
         .slice(-120)
         .map(event => ({
           event,
-          day,
+          day: absoluteDay,
           annotation: annotateEvent(event),
         }))
 
@@ -1376,7 +1399,7 @@ export class MockFastForwardClient implements FastForwardClient {
         message: dayState.headline,
       }
       this.notify()
-      if (this.paceMs > 0) await delay(this.paceMs)
+      if (this.paceMs > 0 && !this.skipped) await delay(this.paceMs)
     }
 
     if (runId !== this.runId) return
@@ -1412,13 +1435,20 @@ export class MockFastForwardClient implements FastForwardClient {
     if (this.running && this.state.status === 'running') this.pause()
     const nextDay = Math.min(this.state.day + 1, this.state.totalDays)
     if (this.state.totalDays === 0) {
-      this.state = { ...this.state, totalDays: this.owner.config.fastForward.days }
+      const snapshot = await this.owner.getSnapshot()
+      this.state = {
+        ...this.state,
+        totalDays: this.owner.config.fastForward.days,
+        startDay: snapshot.day,
+        endDay: snapshot.day + this.owner.config.fastForward.days,
+      }
     }
     if (nextDay <= this.state.day) {
       return this.getState()
     }
 
-    const dayState = await this.owner.simulateDay(nextDay, this.runId + 1)
+    const absoluteDay = this.state.startDay + nextDay - 1
+    const dayState = await this.owner.simulateDay(absoluteDay, this.runId + 1)
     this.runId += 1
     this.running = false
     this.paused = true
@@ -1426,7 +1456,7 @@ export class MockFastForwardClient implements FastForwardClient {
     const annotated: FastForwardEvent[] = newEvents
       .filter(event => event.type !== 'player.gather' && event.type !== 'player.craft')
       .slice(-120)
-      .map(event => ({ event, day: nextDay, annotation: annotateEvent(event) }))
+      .map(event => ({ event, day: absoluteDay, annotation: annotateEvent(event) }))
 
     this.state = {
       ...this.state,
@@ -1442,10 +1472,25 @@ export class MockFastForwardClient implements FastForwardClient {
     return this.getState()
   }
 
+  skip(): void {
+    if (!this.running) return
+    this.skipped = true
+    this.paused = false
+    if (this.state.status === 'paused') {
+      this.state = {
+        ...this.state,
+        status: 'running',
+        message: 'Skipping to the end of the week…',
+      }
+      this.notify()
+    }
+  }
+
   stop(): void {
     this.runId += 1
     this.running = false
     this.paused = false
+    this.skipped = false
   }
 
   private async waitWhilePaused(runId: number): Promise<void> {

@@ -4,34 +4,233 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta name="description" content="Ironblock spectator dashboard — a readable, live view of the market-town economy: merchants, trades, prices, sinks and the reasons behind every change." />
-    <title>Ironblock — Spectator Dashboard</title>
+    <meta
+      name="description"
+      content="Ironblock is a live market-town economy simulation. Watch eight merchant stalls and eight bot townsfolk trade, restock, survive caravans and go broke — then fast-forward a whole week in seconds."
+    />
+    <title>Ironblock — Live Market Town</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./src/spectator/styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to the market</a>
     <div id="app">
       <header class="topbar" id="topbar">
-        <div class="brand">
-          <span class="logo" aria-hidden="true">⛏</span>
-          IRONBLOCK
-          <span id="mode-badge" class="chip"><span class="dot pulse" aria-hidden="true"></span><span id="mode-text">connecting…</span></span>
+        <div class="topbar-inner">
+          <div class="brand" aria-label="Ironblock market town">
+            <span class="logo" aria-hidden="true">⛏</span>
+            <span class="brand-copy">
+              <span class="brand-name">IRONBLOCK</span>
+              <span class="brand-sub">market town</span>
+            </span>
+          </div>
+
+          <div class="topbar-status">
+            <span class="chip mode-chip" id="mode-badge">
+              <span class="dot pulse" aria-hidden="true"></span>
+              <span id="mode-text">connecting…</span>
+            </span>
+            <span class="chip" id="clock-chip" aria-live="polite">Day —</span>
+          </div>
+
+          <span class="topbar-spacer"></span>
+
+          <div class="topbar-actions">
+            <button class="btn btn-primary" id="ff-run" type="button">Run 7-day week</button>
+            <button class="btn btn-quiet" id="ff-skip" type="button" hidden>Skip to end</button>
+            <a class="game-link" href="./index.html" id="open-game-link">Open game <span aria-hidden="true">→</span></a>
+          </div>
         </div>
-        <span class="chip" id="clock-chip">day —</span>
-        <span class="chip" id="seq-chip">event —</span>
-        <span class="spacer"></span>
-        <a class="topbar-link" id="contract-link" href="https://explorer.testnet.near.org/accounts/v2.ironblock-items.testnet" target="_blank" rel="noreferrer noopener">contract</a>
-        <a class="topbar-link" href="./index.html" id="open-game-link">Open game →</a>
+
+        <div class="run-strip" id="ff-strip" hidden>
+          <div class="run-strip-inner">
+            <div class="run-copy">
+              <span class="run-label">7-day preview</span>
+              <span id="ff-status" role="status" aria-live="polite">Ready.</span>
+            </div>
+            <div
+              class="progress"
+              id="ff-progress-wrap"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              aria-valuetext="Ready"
+              aria-label="7-day simulation progress"
+            >
+              <span id="ff-progress"></span>
+            </div>
+          </div>
+        </div>
       </header>
-      <main class="layout" id="layout">
-        <div class="col-left" id="col-left"></div>
-        <div class="col-main" id="col-main"></div>
-        <div class="col-right" id="col-right"></div>
+
+      <p class="connection-note" id="connection-note" hidden></p>
+
+      <main class="page" id="main">
+        <section class="hero" aria-labelledby="town-status">
+          <p class="eyebrow">
+            <span class="eyebrow-dot" aria-hidden="true"></span>
+            <span id="hero-context">Live market-town economy</span>
+            <button class="text-button" id="view-live" type="button" hidden>Back to live</button>
+          </p>
+
+          <h1 id="town-status" data-tone="neutral">Opening the market…</h1>
+          <p class="lede" id="town-summary">
+            Eight bot townsfolk trade with eight merchant stalls while caravans, rent and the odd bankruptcy move the
+            money. This page watches the whole town.
+          </p>
+
+          <p class="glance" id="hero-glance" aria-label="Week at a glance">
+            <span class="glance-item">Day <b id="stat-day">—</b></span>
+            <span class="glance-sep" aria-hidden="true">·</span>
+            <span class="glance-item"><b id="stat-stalls">—</b> stalls open</span>
+            <span class="glance-sep" aria-hidden="true">·</span>
+            <span class="glance-item"><b id="stat-cash">—</b> in town</span>
+            <span class="glance-sep" aria-hidden="true">·</span>
+            <span class="glance-item"><b id="stat-volume">—</b> units traded</span>
+          </p>
+        </section>
+
+        <section class="card price-card" aria-labelledby="price-title">
+          <header class="card-head price-head">
+            <div>
+              <p class="section-kicker" id="price-range">The market at a glance</p>
+              <h2 id="price-title">Prices this week</h2>
+              <p class="card-sub" id="price-sub">
+                Each line starts at its first recorded ask. Hover or focus a day for exact prices.
+              </p>
+            </div>
+          </header>
+          <div class="price-legend" id="price-legend" aria-label="Price chart items"></div>
+          <div class="price-chart-wrap" id="price-chart-wrap">
+            <div id="price-chart" class="price-chart"></div>
+            <div class="price-tooltip" id="price-tooltip" role="tooltip" hidden></div>
+          </div>
+          <p class="chart-caption" id="price-caption">
+            Run the 7-day week to draw the town's prices here.
+          </p>
+          <p class="chart-source" id="price-source">
+            Recorded merchant quotes only. Dashed spans mean no quote was sampled that day.
+          </p>
+        </section>
+
+        <div class="support-grid">
+          <section class="card wealth-card" aria-labelledby="wealth-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">Who got richer</p>
+                <h2 id="wealth-title">Merchant wealth</h2>
+                <p class="card-sub" id="wealth-sub">Cash in each till · colour shows change from week open.</p>
+              </div>
+            </header>
+            <div class="wealth-chart" id="wealth-chart" aria-live="off"></div>
+            <p class="chart-caption" id="wealth-caption">Waiting for the merchant tills…</p>
+          </section>
+
+          <section class="card volume-card" aria-labelledby="volume-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">How busy it got</p>
+                <h2 id="volume-title">Trade volume</h2>
+                <p class="card-sub">Units traded each day. Bars fill in as the week runs.</p>
+              </div>
+            </header>
+            <div class="volume-chart" id="volume-chart"></div>
+            <p class="chart-caption" id="volume-caption">Waiting for the first day to close…</p>
+          </section>
+
+          <section class="card story-card" aria-labelledby="story-title">
+            <header class="card-head">
+              <div>
+                <p class="section-kicker">The human version</p>
+                <h2 id="story-title">What happened</h2>
+              </div>
+              <p class="card-hint">Click a line for the why.</p>
+            </header>
+            <ol class="story-feed" id="story-feed" aria-live="off"></ol>
+            <p class="empty-note" id="story-empty" hidden>No market events yet. Run a week to see the town in motion.</p>
+          </section>
+        </div>
+
+        <details class="details-card" id="proof-details">
+          <summary>
+            <span class="summary-copy">
+              <span class="summary-title">Proof &amp; settlement details</span>
+              <span class="summary-sub">Merchants, townsfolk, the week's newspaper, raw events and on-chain proof</span>
+            </span>
+            <span class="summary-chevron" aria-hidden="true">+</span>
+          </summary>
+
+          <div class="details-body">
+            <section class="detail-section" aria-labelledby="merchants-heading">
+              <h3 id="merchants-heading">Merchant stalls</h3>
+              <div class="merchant-grid" id="merchant-grid"><p class="loading-note">loading…</p></div>
+            </section>
+
+            <section class="detail-section" aria-labelledby="townsfolk-heading">
+              <h3 id="townsfolk-heading">The eight townsfolk</h3>
+              <div class="townsfolk-grid" id="townsfolk-grid"></div>
+            </section>
+
+            <section class="detail-section" aria-labelledby="newspaper-heading">
+              <h3 id="newspaper-heading">Town newspaper</h3>
+              <div class="newspaper" id="newspaper"><p class="loading-note">loading…</p></div>
+            </section>
+
+            <section class="detail-section" aria-labelledby="tape-heading">
+              <h3 id="tape-heading">Recent trades</h3>
+              <ul class="tape-list" id="tape-list"><li class="loading-note">loading…</li></ul>
+            </section>
+
+            <section class="detail-section" aria-labelledby="raw-heading">
+              <h3 id="raw-heading">Raw event feed</h3>
+              <div class="filterbar">
+                <label class="visually-hidden" for="filter-group">filter by type</label>
+                <select id="filter-group">
+                  <option value="all">all types</option>
+                  <option value="trades">trades</option>
+                  <option value="merchants">merchants</option>
+                  <option value="sinks">sinks &amp; rent</option>
+                  <option value="caravan">caravan</option>
+                  <option value="orders">orders</option>
+                  <option value="system">system</option>
+                </select>
+                <label class="visually-hidden" for="filter-merchant">filter by merchant</label>
+                <select id="filter-merchant"><option value="all">all merchants</option></select>
+                <label class="visually-hidden" for="filter-item">filter by item</label>
+                <input id="filter-item" type="text" placeholder="item…" spellcheck="false" />
+              </div>
+              <div class="events-wrapper">
+                <ul class="event-list" id="event-list"></ul>
+                <div id="event-detail"></div>
+              </div>
+            </section>
+
+            <section class="detail-section" aria-labelledby="proof-heading">
+              <h3 id="proof-heading">On-chain proof — NEP-245 testnet</h3>
+              <div id="proof-panel-body"><p class="loading-note">loading…</p></div>
+            </section>
+
+            <section class="detail-section" aria-labelledby="integrity-heading">
+              <h3 id="integrity-heading">Simulation integrity</h3>
+              <div id="run-proof"><p class="loading-note">No week has been run yet.</p></div>
+            </section>
+          </div>
+        </details>
       </main>
+
+      <footer class="footer page">
+        <span>Read-only observer. The town runs itself.</span>
+        <span id="footer-mode">Connecting…</span>
+      </footer>
     </div>
+
     <noscript>
-      <p style="padding:16px">The spectator dashboard needs JavaScript. The read-only API is available under <code>/api/market/*</code>.</p>
+      <p class="noscript">
+        The spectator page needs JavaScript. The read-only API is available under <code>/api/market/*</code>.
+      </p>
     </noscript>
+
     <script type="module" src="./src/spectator/main.ts"></script>
   </body>
 </html>

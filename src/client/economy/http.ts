@@ -31,6 +31,7 @@ import type {
   EconomyTradeResponse,
 } from '../../shared/economy/api'
 import { NEAR_AUTH_SESSION_STORAGE_KEY } from '../../shared/auth/defaults'
+import { FAST_FORWARD_PLAYBACK_MS } from '../../shared/economy/fast-forward'
 import { describeEvent, formatDayClock } from '../../ui/format'
 import type {
   CraftResult,
@@ -828,14 +829,66 @@ const idleFastForwardState = (): FastForwardState => ({
   events: [],
   recap: null,
   message: 'Ready to simulate a week of town trade on the server.',
+  fromTime: 0,
+  toTime: 0,
+  startDay: 0,
+  endDay: 0,
+  revealDurationMs: FAST_FORWARD_PLAYBACK_MS,
+  worldPlayback: 'server',
 })
+
+export interface HttpFastForwardTimingOptions {
+  /** Wall-clock reveal length. Defaults to the server playback window. */
+  revealDurationMs?: number
+  /** Test seams for the reveal clock. */
+  now?: () => number
+  scheduleInterval?: (callback: () => void, milliseconds: number) => unknown
+  cancelInterval?: (handle: unknown) => void
+}
+
+interface PendingReveal {
+  token: number
+  runStart: number
+  durationMs: number
+  totalDays: number
+  fromTime: number
+  toTime: number
+  startDay: number
+  endDay: number
+  dayCards: FastForwardDay[]
+  events: FastForwardEvent[]
+  resolve: (() => void) | null
+}
 
 export class HttpFastForwardClient implements FastForwardClient {
   private state: FastForwardState = idleFastForwardState()
   private readonly listeners = new Set<(state: FastForwardState) => void>()
   private running = false
+  private runToken = 0
+  private pending: PendingReveal | null = null
+  private timer: unknown = null
 
-  constructor(private readonly owner: HttpEconomyClient) {}
+  private readonly revealDurationMs: number
+  private readonly now: () => number
+  private readonly scheduleInterval: (callback: () => void, milliseconds: number) => unknown
+  private readonly cancelInterval: (handle: unknown) => void
+
+  constructor(
+    private readonly owner: HttpEconomyClient,
+    options: HttpFastForwardTimingOptions = {},
+  ) {
+    this.revealDurationMs = Math.max(
+      1,
+      Math.floor(options.revealDurationMs ?? FAST_FORWARD_PLAYBACK_MS),
+    )
+    this.now = options.now ?? (() => Date.now())
+    this.scheduleInterval =
+      options.scheduleInterval ??
+      ((callback, milliseconds) => setInterval(callback, milliseconds))
+    this.cancelInterval =
+      options.cancelInterval ??
+      (handle => clearInterval(handle as ReturnType<typeof setInterval>))
+  }
 
   onChange(listener: (state: FastForwardState) => void): () => void {
     this.listeners.add(listener)
@@ -851,7 +904,9 @@ export class HttpFastForwardClient implements FastForwardClient {
   }
 
   reset(): void {
+    this.runToken += 1
     this.running = false
+    this.cancelReveal()
     this.update(idleFastForwardState())
   }
 
@@ -869,52 +924,189 @@ export class HttpFastForwardClient implements FastForwardClient {
       1,
       Math.max(1, Math.floor(this.owner.config.fastForward.maxDays)),
     )
+    const token = ++this.runToken
     this.running = true
+    this.cancelReveal()
     this.update({
+      ...idleFastForwardState(),
       status: 'running',
-      day: 0,
       totalDays,
-      progress: 0,
-      days: [],
-      events: [],
       recap: this.state.recap,
       message: `Simulating ${totalDays} days on the authoritative server…`,
+      revealDurationMs: this.revealDurationMs,
     })
 
     try {
       const result = await this.owner.requestFastForward(totalDays)
+      if (token !== this.runToken) return this.getState()
+
       const dayCards = this.buildDays(result)
-      const events: FastForwardEvent[] = result.events.map(event => ({
-        event,
-        day: Math.floor(event.time / DEFAULT_DAY_SECONDS) + 1,
-        annotation: describeEvent(event).headline,
-      }))
-      // Refresh the live HUD from the post-simulation world before publishing.
+      const events = this.mapEvents(result.events)
+      const revealedDays = Math.max(
+        1,
+        dayCards.length || result.days || totalDays,
+      )
+      const reveal: PendingReveal = {
+        token,
+        runStart: this.now(),
+        durationMs: this.revealDurationMs,
+        totalDays: revealedDays,
+        fromTime: result.fromTime,
+        toTime: result.toTime,
+        startDay: result.startDay,
+        endDay:
+          result.endDay ??
+          result.startDay + revealedDays,
+        dayCards,
+        events,
+        resolve: null,
+      }
+      this.pending = reveal
+      this.publishReveal(reveal, 0)
+      await new Promise<void>(resolve => {
+        reveal.resolve = resolve
+        this.startRevealTimer(reveal)
+      })
+      if (token !== this.runToken) return this.getState()
+
+      this.pending = null
+      // One reconciliation read after the whole reveal, never while the world
+      // playback is still in progress.
       await this.owner.sync()
+      if (token !== this.runToken) return this.getState()
       const recap = await this.owner.getRecap()
+      if (token !== this.runToken) return this.getState()
 
       this.update({
         status: 'done',
-        day: result.summaries.length,
-        totalDays,
+        day: reveal.totalDays,
+        totalDays: reveal.totalDays,
         progress: 1,
-        days: dayCards,
-        events,
+        days: reveal.dayCards,
+        events: reveal.events,
         recap,
         message: `Week complete — ${recap.headline}.`,
+        fromTime: reveal.fromTime,
+        toTime: reveal.toTime,
+        startDay: reveal.startDay,
+        endDay: reveal.endDay,
+        revealDurationMs: this.revealDurationMs,
+        worldPlayback: 'server',
       })
       return this.getState()
     } catch (error) {
+      if (token !== this.runToken) return this.getState()
+      this.cancelReveal()
       this.update({
-        ...this.state,
-        status: 'idle',
-        progress: 0,
+        ...idleFastForwardState(),
+        recap: this.state.recap,
+        totalDays,
         message: readableError(error),
+        revealDurationMs: this.revealDurationMs,
       })
+      // The POST may have failed after the server committed; reconcile once.
+      try {
+        await this.owner.sync()
+      } catch {
+        // Keep the actionable error message from the failed request.
+      }
       return this.getState()
     } finally {
-      this.running = false
+      if (token === this.runToken) this.running = false
     }
+  }
+
+  private startRevealTimer(reveal: PendingReveal): void {
+    this.clearTimer()
+    const interval = Math.max(
+      10,
+      Math.min(100, Math.round(this.revealDurationMs / 40)),
+    )
+    this.timer = this.scheduleInterval(() => {
+      if (this.pending !== reveal || reveal.token !== this.runToken) return
+      const elapsed = Math.max(0, this.now() - reveal.runStart)
+      const fraction = Math.min(1, elapsed / reveal.durationMs)
+      this.publishReveal(reveal, fraction)
+      if (fraction >= 1) {
+        this.clearTimer()
+        const resolve = reveal.resolve
+        reveal.resolve = null
+        resolve?.()
+      }
+    }, interval)
+  }
+
+  private publishReveal(reveal: PendingReveal, fraction: number): void {
+    const completedDays = Math.min(
+      reveal.totalDays,
+      Math.floor(fraction * reveal.totalDays + 1e-9),
+    )
+    const revealTime =
+      reveal.fromTime + fraction * (reveal.toTime - reveal.fromTime)
+    const events =
+      fraction >= 1
+        ? reveal.events
+        : reveal.events.filter(entry => entry.event.time <= revealTime)
+    this.update({
+      status: 'running',
+      day: completedDays,
+      totalDays: reveal.totalDays,
+      progress: fraction,
+      days: reveal.dayCards.slice(0, completedDays),
+      events,
+      recap: this.state.recap,
+      message:
+        completedDays >= reveal.totalDays
+          ? 'Week complete — updating the live market…'
+          : `Fast-forwarding — day ${Math.min(
+              reveal.endDay,
+              reveal.startDay + completedDays,
+            )} of ${reveal.endDay}`,
+      fromTime: reveal.fromTime,
+      toTime: reveal.toTime,
+      startDay: reveal.startDay,
+      endDay: reveal.endDay,
+      revealDurationMs: this.revealDurationMs,
+      worldPlayback: 'server',
+    })
+  }
+
+  private clearTimer(): void {
+    if (this.timer === null) return
+    this.cancelInterval(this.timer)
+    this.timer = null
+  }
+
+  private cancelReveal(): void {
+    this.clearTimer()
+    const pending = this.pending
+    this.pending = null
+    if (!pending) return
+    const resolve = pending.resolve
+    pending.resolve = null
+    resolve?.()
+  }
+
+  private mapEvents(
+    events: readonly SequencedMarketEvent[],
+  ): FastForwardEvent[] {
+    const seen = new Set<string>()
+    const mapped: FastForwardEvent[] = []
+    for (const event of events) {
+      const key = event.id || String(event.sequence)
+      if (seen.has(key)) continue
+      seen.add(key)
+      mapped.push({
+        event,
+        day: Math.floor(event.time / DEFAULT_DAY_SECONDS) + 1,
+        annotation: describeEvent(event).headline,
+      })
+    }
+    return mapped.sort(
+      (left, right) =>
+        left.event.time - right.event.time ||
+        left.event.sequence - right.event.sequence,
+    )
   }
 
   private buildDays(result: EconomyFastForwardResponse): FastForwardDay[] {
@@ -954,5 +1146,15 @@ export class HttpFastForwardClient implements FastForwardClient {
   async step(): Promise<FastForwardState> {
     if (this.state.status === 'running') return this.getState()
     return this.start(1)
+  }
+
+  skip(): void {
+    const reveal = this.pending
+    if (!reveal) return
+    this.clearTimer()
+    this.publishReveal(reveal, 1)
+    const resolve = reveal.resolve
+    reveal.resolve = null
+    resolve?.()
   }
 }

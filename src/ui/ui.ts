@@ -1,6 +1,7 @@
 import { characters } from '../config/characters'
 import { economy } from '../config/economy'
 import { readNearAuthSession } from '../client/auth/near-auth'
+import { FAST_FORWARD_PLAYBACK_MS } from '../shared/economy/fast-forward'
 import {
   mountWithdrawPanel,
   type WithdrawPanel,
@@ -11,6 +12,7 @@ import type {
   FastForwardState,
   MerchantView,
   SessionRecap,
+  TownHealth,
 } from '../client/economy/types'
 import type {
   ItemConfig,
@@ -26,9 +28,9 @@ import type {
 import {
   blockedReasonLabel,
   describeEvent,
+  describeLiveEvent,
   eventTypeLabel,
   explainQuote,
-  formatDayClock,
   formatEventTime,
   formatMoney,
   formatNumber,
@@ -40,7 +42,27 @@ import {
   signedPercent,
   summarizeReasons,
   townHealthLabel,
+  tradeFollowUp,
 } from './format'
+import {
+  guidePercent,
+  selectFirstDayGuide,
+  type FirstDayGuide,
+  type GuideBuyer,
+  type GuideTarget,
+  type GuideWaypoint,
+} from './guide'
+import {
+  buildBestPriceIndex,
+  buildMarketBoard,
+  buildMarketRoutes,
+  findBestBuyer,
+  loadMarketQuotes,
+  type ItemBestPrices,
+  type MarketQuoteEntry,
+  type MarketRoute,
+  type MarketSide,
+} from './market-board'
 
 export interface InteractionPrompt {
   key: string
@@ -50,6 +72,7 @@ export interface InteractionPrompt {
 
 export interface IronblockUI {
   openMerchant(id: MerchantId): Promise<void>
+  openMarket(): Promise<void>
   openInventory(): void
   openFastForward(): void
   openRecap(): Promise<void>
@@ -59,7 +82,13 @@ export interface IronblockUI {
   closePanel(): void
   isPanelOpen(): boolean
   setPrompt(prompt: InteractionPrompt | null): void
+  /** Show or hide the live first-day direction cue; kept in sync by the game client. */
+  setWaypoint(waypoint: GuideWaypoint | null): void
+  /** Reopen the first-day objective after it was dismissed. */
+  showGuide(): void
   toast(message: string, tone?: 'neutral' | 'good' | 'bad'): void
+  /** True while a fast-forward reveal/world playback is in progress. */
+  isFastForwarding(): boolean
   refresh(): Promise<void>
   destroy(): void
 }
@@ -69,10 +98,21 @@ interface MountOptions {
   /** Shown in the HUD mode chip and a banner when the real client fell back. */
   note?: string
   fellBackToMock?: boolean
+  /** Called by "Show me" / "Go there" actions so the world can set or clear a waypoint. */
+  onNavigate?: (target: GuideTarget | null) => void
 }
 
 type PanelSize = 'default' | 'narrow' | 'wide'
-type PanelKind = 'merchant' | 'inventory' | 'fastforward' | 'recap' | 'orders' | 'townsfolk' | 'event'
+type PanelKind =
+  | 'merchant'
+  | 'market'
+  | 'inventory'
+  | 'fastforward'
+  | 'recap'
+  | 'orders'
+  | 'townsfolk'
+  | 'help'
+  | 'event'
 
 interface PanelShell {
   title: string
@@ -125,6 +165,49 @@ const stalenessLabel = (quote: Quote): string => {
   return blockedReasonLabel(quote.blockedReason)
 }
 
+const FIRST_DAY_DISMISSED_KEY = 'ironblock:first-day-goal-dismissed:v1'
+
+const readFirstDayDismissed = (): boolean => {
+  try {
+    return window.localStorage.getItem(FIRST_DAY_DISMISSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const rememberFirstDayDismissed = (): void => {
+  try {
+    window.localStorage.setItem(FIRST_DAY_DISMISSED_KEY, '1')
+  } catch {
+    // Private browsing or storage denial: the card still dismisses for this session.
+  }
+}
+
+const forgetFirstDayDismissed = (): void => {
+  try {
+    window.localStorage.removeItem(FIRST_DAY_DISMISSED_KEY)
+  } catch {
+    // The card still reopens for this session.
+  }
+}
+
+const helpSteps = [
+  ['Move', 'Walk with WASD or the arrow keys.'],
+  ['Interact', 'Press E or Space near a stall or resource.'],
+  ['Trade', 'Buy low at one stall, then sell high to another.'],
+  ['Market', 'Press M for every best bid and ask, plus a profitable route.'],
+  ['Gather', 'Work ore, fields, grove or pasture to stock your bag.'],
+  ['Fast-forward', 'Run the week with F when you want the market to move.'],
+] as const
+
+const healthFromOpenStalls = (open: number, total: number): TownHealth => {
+  const ratio = open / Math.max(1, total)
+  if (ratio >= 1) return 'thriving'
+  if (ratio >= 0.75) return 'stable'
+  if (ratio >= 0.4) return 'strained'
+  return 'critical'
+}
+
 export function mountIronblockUI(options: MountOptions): IronblockUI {
   const { client } = options
   if (document.getElementById('ironblock-ui')) {
@@ -139,12 +222,14 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   const hud = $('header', 'ib-hud')
   hud.setAttribute('role', 'banner')
 
+  const modeChip = $('span', 'ib-chip ib-brand-chip', client.mode === 'server' ? 'Live market' : 'Mock market')
+
   const brand = $('div', 'ib-brand')
-  brand.append($('strong', undefined, 'IRONBLOCK'), $('span', undefined, 'Market Square'))
+  brand.append($('strong', undefined, 'IRONBLOCK'), $('span', undefined, 'Market Square'), modeChip)
 
   const stats = $('div', 'ib-stats')
-  const stat = (label: string) => {
-    const box = $('div', 'ib-stat')
+  const stat = (label: string, className = '') => {
+    const box = $('div', `ib-stat${className ? ` ${className}` : ''}`)
     const title = $('b', undefined, label)
     const value = $('span', undefined, '—')
     const sub = $('small')
@@ -154,10 +239,10 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   }
 
   const cashStat = stat('Cash')
+  const clockStat = stat('Day', 'is-day')
   const weightStat = stat('Carry')
   const staminaStat = stat('Stamina')
-  const clockStat = stat('Day')
-  const townStat = stat('Town')
+  const townStat = stat('Town', 'is-town')
 
   const cashBar = $('div', 'ib-bar')
   const cashFill = $('i')
@@ -169,47 +254,106 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   staminaBar.append(staminaFill)
   staminaStat.box.append(staminaStat.sub, staminaBar)
 
+  const ffChip = $('span', 'ib-ff-chip')
+  ffChip.hidden = true
+  ffChip.setAttribute('aria-live', 'polite')
+
   const actions = $('div', 'ib-actions')
-  const hudButton = (label: string, key: string, onClick: () => void) => {
-    const element = button(label, onClick, { className: 'ib-hud-button' })
+  const hudButton = (
+    label: string,
+    key: string,
+    onClick: () => void,
+    className = 'ib-hud-button',
+  ) => {
+    const element = button(label, onClick, { className })
     const kbd = $('kbd', undefined, key)
     element.append(kbd)
     actions.append(element)
     return element
   }
   hudButton('Bag', 'I', () => ui.openInventory())
+  hudButton('Market', 'M', () => void ui.openMarket())
   hudButton('Orders', 'O', () => ui.openOrders())
-  hudButton('Townsfolk', 'T', () => ui.openTownsfolk())
-  hudButton('Week', 'F', () => ui.openFastForward())
-  hudButton('Recap', 'R', () => void ui.openRecap())
-  const withdrawButton = button('Withdraw to NEAR', openWithdraw, {
-    className: 'ib-hud-button',
-  })
-  withdrawButton.title = 'Withdraw game items to your NEAR testnet account'
-  actions.append(withdrawButton)
+  hudButton('Week', 'F', () => ui.openFastForward(), 'ib-hud-button is-primary')
 
-  // Root-relative to Vite's BASE_URL so subpath builds open the right page.
+  const moreButton = button('More', () => toggleMoreMenu(), {
+    className: 'ib-hud-button ib-more-button',
+  })
+  moreButton.setAttribute('aria-haspopup', 'menu')
+  moreButton.setAttribute('aria-expanded', 'false')
+  moreButton.setAttribute('aria-controls', 'ib-more-menu')
+  actions.append(moreButton)
+
+  const moreMenu = $('div', 'ib-more-menu')
+  moreMenu.id = 'ib-more-menu'
+  moreMenu.hidden = true
+  moreMenu.setAttribute('role', 'menu')
+  moreMenu.setAttribute('aria-label', 'More actions')
+
+  const menuAction = (label: string, onClick: () => void, key?: string) => {
+    const item = button(label, () => {
+      closeMoreMenu()
+      onClick()
+    }, { className: 'ib-more-item' })
+    item.setAttribute('role', 'menuitem')
+    if (key) item.append($('kbd', undefined, key))
+    moreMenu.append(item)
+    return item
+  }
+
+  menuAction('Recap', () => void ui.openRecap(), 'R')
+  menuAction('Townsfolk', () => ui.openTownsfolk(), 'T')
+  menuAction('First-day goal', () => openGuide())
+  menuAction('Withdraw to NEAR', openWithdraw)
+  menuAction('How to play', () => renderHelp())
+
   const spectatorLink = document.createElement('a')
-  spectatorLink.className = 'ib-hud-button'
+  spectatorLink.className = 'ib-more-item'
   spectatorLink.href = `${(import.meta.env.BASE_URL || '/').replace(/\/$/, '')}/spectator`
   spectatorLink.target = '_blank'
   spectatorLink.rel = 'noopener noreferrer'
   spectatorLink.textContent = 'Spectator ↗'
   spectatorLink.title = 'Open the read-only market spectator dashboard'
-  actions.append(spectatorLink)
+  spectatorLink.setAttribute('role', 'menuitem')
+  spectatorLink.addEventListener('click', () => closeMoreMenu())
+  moreMenu.append(spectatorLink)
+  actions.append(moreMenu)
 
-  hud.append(brand, stats, actions)
+  hud.append(brand, stats, ffChip, actions)
 
   const ticker = $('aside', 'ib-ticker')
+  ticker.id = 'ib-market-wire'
+  ticker.hidden = true
   ticker.setAttribute('aria-label', 'Recent market events')
   const tickerHeader = $('header')
   tickerHeader.append($('h2', undefined, 'Market Wire'))
   const tickerCount = $('span', 'ib-muted', 'live')
-  tickerCount.style.color = '#b9a985'
   tickerHeader.append(tickerCount)
+  const tickerClose = button('×', () => setWireOpen(false), {
+    className: 'ib-close ib-wire-close',
+    title: 'Close Market Wire',
+  })
+  tickerClose.setAttribute('aria-label', 'Close Market Wire')
+  tickerHeader.append(tickerClose)
   const tickerList = $('ol')
   tickerList.setAttribute('aria-live', 'polite')
   ticker.append(tickerHeader, tickerList)
+
+  const wireToggle = button('Wire · 0', () => setWireOpen(!wireOpen), {
+    className: 'ib-wire-toggle',
+  })
+  wireToggle.setAttribute('aria-controls', 'ib-market-wire')
+  wireToggle.setAttribute('aria-expanded', 'false')
+  wireToggle.title = 'Open the recent market events drawer'
+
+  const live = button('', () => setWireOpen(true), {
+    className: 'ib-live',
+  })
+  live.hidden = true
+  live.title = 'Open the Market Wire'
+  const liveTag = $('span', 'ib-live-tag', 'Live')
+  const liveText = $('span', 'ib-live-text')
+  live.append(liveTag, liveText)
 
   const prompt = $('div', 'ib-prompt')
   prompt.hidden = true
@@ -257,9 +401,68 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   withdrawCard.append(withdrawHead, withdrawBody)
   withdrawOverlay.append(withdrawCard)
 
-  const modeChip = $('span', 'ib-chip', client.mode === 'server' ? 'Live market' : 'Mock market')
+  const guide = $('section', 'ib-guide')
+  guide.setAttribute('aria-label', 'First day objective')
+  guide.hidden = readFirstDayDismissed()
+  const guideHead = $('div', 'ib-guide-head')
+  guideHead.append($('strong', undefined, 'First day'))
+  const guideCount = $('span', 'ib-guide-count', '1 / 4')
+  const guideClose = button('×', () => dismissGuide(), {
+    className: 'ib-close ib-guide-close',
+    title: 'Dismiss the first-day objective',
+  })
+  guideClose.setAttribute('aria-label', 'Dismiss the first-day objective')
+  guideHead.append(guideCount, guideClose)
 
-  root.append(hud, ticker, prompt, toasts, scrim, panel, tooltip, banner, withdrawOverlay)
+  const guideIntro = $('p', 'ib-guide-intro')
+  const guideObjective = $('b', 'ib-guide-objective', 'Reading the market…')
+  const guideDetail = $('p', 'ib-guide-detail')
+  const guideProgress = $('div', 'ib-guide-progress')
+  guideProgress.setAttribute('role', 'progressbar')
+  guideProgress.setAttribute('aria-valuemin', '0')
+  guideProgress.setAttribute('aria-valuemax', '1')
+  guideProgress.setAttribute('aria-valuenow', '0')
+  guideProgress.setAttribute('aria-label', 'First-day goal progress')
+  const guideFill = $('i')
+  guideProgress.append(guideFill)
+  const guideMeta = $('div', 'ib-guide-meta')
+  const guideProgressLabel = $('span', 'ib-guide-progress-label', '0 / 0')
+  const guideAction = button('Show me', () => performGuideAction(), {
+    className: 'ib-button is-small is-primary',
+  })
+  guideAction.title = 'Close overlays and show the way to this goal'
+  const guideHelp = button('How to play', () => renderHelp(), {
+    className: 'ib-button is-small is-quiet',
+  })
+  guideHelp.title = 'Open the full How to Play panel'
+  guideMeta.append(guideProgressLabel, guideAction, guideHelp)
+  const guideWaypoint = $('p', 'ib-guide-waypoint')
+  guideWaypoint.hidden = true
+  guideWaypoint.setAttribute('aria-live', 'polite')
+  guide.append(
+    guideHead,
+    guideIntro,
+    guideObjective,
+    guideDetail,
+    guideProgress,
+    guideMeta,
+    guideWaypoint,
+  )
+
+  root.append(
+    hud,
+    wireToggle,
+    live,
+    ticker,
+    prompt,
+    toasts,
+    scrim,
+    panel,
+    tooltip,
+    banner,
+    withdrawOverlay,
+    guide,
+  )
   document.body.append(root)
 
   if (options.fellBackToMock && options.note) {
@@ -277,10 +480,232 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   let busy = false
   let lastFocused: HTMLElement | null = null
   let fastForwardUnsub: (() => void) | null = null
+  let fastForwardHudUnsub: (() => void) | null = null
+  let wireOpen = false
+  let moreOpen = false
+  let weekCompleteTimer: number | null = null
   let destroyed = false
+  let guideState: FirstDayGuide | null = null
+  let guideRenderToken = 0
+  let guideBuyer: GuideBuyer | null = null
+  let guideBuyerFetchedAt = 0
+  let guideStepId: FirstDayGuide['step']['id'] | null = null
+  let guidedTarget: GuideTarget | null = null
+  let guidedTargetFollowsStep = false
+  let currentWaypoint: GuideWaypoint | null = null
+  let quoteCache: { entries: MarketQuoteEntry[]; at: number } | null = null
+  let quoteRequest: Promise<MarketQuoteEntry[]> | null = null
+  let marketRenderToken = 0
+
+  const QUOTE_CACHE_MS = 15_000
 
   const keyFor = (merchantId: MerchantId, side: TradeSide, itemId: ItemId) =>
     `${merchantId}:${side}:${itemId}`
+
+  function setWireOpen(open: boolean): void {
+    if (wireOpen === open) return
+    wireOpen = open
+    ticker.hidden = !open
+    wireToggle.setAttribute('aria-expanded', String(open))
+    wireToggle.classList.toggle('is-open', open)
+    if (open) {
+      setMoreMenuOpen(false)
+      tickerClose.focus({ preventScroll: true })
+    } else if (ticker.contains(document.activeElement)) {
+      wireToggle.focus({ preventScroll: true })
+    }
+  }
+
+  function setMoreMenuOpen(open: boolean): void {
+    if (moreOpen === open) return
+    moreOpen = open
+    moreMenu.hidden = !open
+    moreButton.setAttribute('aria-expanded', String(open))
+    moreButton.classList.toggle('is-open', open)
+    if (open) {
+      setWireOpen(false)
+      const first = moreMenu.querySelector<HTMLElement>('[role="menuitem"]')
+      first?.focus({ preventScroll: true })
+    } else if (moreMenu.contains(document.activeElement)) {
+      moreButton.focus({ preventScroll: true })
+    }
+  }
+
+  function toggleMoreMenu(): void {
+    setMoreMenuOpen(!moreOpen)
+  }
+
+  function closeMoreMenu(): void {
+    setMoreMenuOpen(false)
+  }
+
+  function dismissGuide(): void {
+    guide.hidden = true
+    rememberFirstDayDismissed()
+  }
+
+  function openGuide(): void {
+    guide.hidden = false
+    forgetFirstDayDismissed()
+    if (snapshot) void renderGuide(snapshot)
+  }
+
+  function renderWaypoint(): void {
+    if (!currentWaypoint) {
+      guideWaypoint.hidden = true
+      return
+    }
+    guideWaypoint.hidden = false
+    guideWaypoint.textContent = currentWaypoint.arrived
+      ? `You are at ${currentWaypoint.label} — press E.`
+      : `${currentWaypoint.label} · ${currentWaypoint.direction} · ${currentWaypoint.distance} paces`
+  }
+
+  function clearNavigation(): void {
+    if (!guidedTarget) return
+    guidedTarget = null
+    guidedTargetFollowsStep = false
+    currentWaypoint = null
+    renderWaypoint()
+    options.onNavigate?.(null)
+  }
+
+  function startNavigation(target: GuideTarget, followsStep: boolean): void {
+    guidedTarget = target
+    guidedTargetFollowsStep = followsStep
+    currentWaypoint = null
+    renderWaypoint()
+    if (options.onNavigate) {
+      options.onNavigate(target)
+    } else {
+      ui.toast(`Head to ${target.label}.`, 'neutral')
+    }
+  }
+
+  function performGuideAction(): void {
+    const step = guideState?.step
+    if (!step) return
+    if (step.target) {
+      closePanel()
+      startNavigation(step.target, true)
+      return
+    }
+    if (step.panel === 'bag') {
+      closePanel()
+      ui.openInventory()
+    } else if (step.panel === 'market') {
+      closePanel()
+      void ui.openMarket()
+    } else if (step.panel === 'week') {
+      ui.openFastForward()
+    }
+  }
+
+  const invalidateMarketQuotes = (): void => {
+    quoteCache = null
+    quoteRequest = null
+    guideBuyerFetchedAt = 0
+  }
+
+  async function marketQuotes(
+    data: EconomySnapshot,
+    force = false,
+  ): Promise<MarketQuoteEntry[]> {
+    if (!force && quoteCache && Date.now() - quoteCache.at < QUOTE_CACHE_MS) {
+      return quoteCache.entries
+    }
+    if (quoteRequest) return quoteRequest
+    const request = loadMarketQuotes(client, data)
+      .then(entries => {
+        quoteCache = { entries, at: Date.now() }
+        return entries
+      })
+      .finally(() => {
+        if (quoteRequest === request) quoteRequest = null
+      })
+    quoteRequest = request
+    return request
+  }
+
+  async function renderGuide(data: EconomySnapshot): Promise<void> {
+    const token = ++guideRenderToken
+    const inventory = data.player.inventory.map(line => ({
+      itemId: line.itemId,
+      quantity: line.quantity,
+    }))
+    const baseInput = {
+      day: data.day,
+      cash: data.player.cash,
+      inventory,
+      events: data.recentEvents,
+    }
+
+    let nextGuide = selectFirstDayGuide(baseInput)
+    if (nextGuide.step.id === 'sell') {
+      if (!guideBuyer || Date.now() - guideBuyerFetchedAt > QUOTE_CACHE_MS) {
+        try {
+          const best = await findBestBuyer(client, data, 'iron_ingot')
+          guideBuyer = best
+            ? {
+                merchantId: best.merchantId,
+                displayName: best.merchantName,
+                unitPrice: best.unitPrice,
+              }
+            : null
+          guideBuyerFetchedAt = Date.now()
+        } catch {
+          guideBuyer = null
+        }
+      }
+      if (token !== guideRenderToken || destroyed) return
+      nextGuide = selectFirstDayGuide({ ...baseInput, bestIngotBuyer: guideBuyer })
+    }
+
+    if (guidedTarget) {
+      const stepChanged = guideStepId !== null && nextGuide.step.id !== guideStepId
+      const guideTargetChanged =
+        guidedTargetFollowsStep && nextGuide.step.target?.id !== guidedTarget.id
+      if (stepChanged || guideTargetChanged) clearNavigation()
+    }
+    guideStepId = nextGuide.step.id
+
+    guideState = nextGuide
+    const { step, intro } = nextGuide
+    guideCount.textContent = `${step.index} / ${step.total}`
+    guideIntro.textContent = intro
+    guideIntro.hidden = step.id === 'sell' || step.id === 'week' || step.id === 'done'
+    guideObjective.textContent = step.title
+    guideObjective.title = step.detail
+    guideDetail.textContent = step.detail
+    // Keep the first gathering step as a slim strip; "Show me" carries the
+    // location detail, so the card does not sit on top of nearby nameplates.
+    guideDetail.hidden = step.id === 'gather'
+    guideProgressLabel.textContent = step.progress.label
+    guideProgress.setAttribute('aria-valuemax', String(Math.max(1, step.progress.target)))
+    guideProgress.setAttribute('aria-valuenow', String(step.progress.current))
+    guideProgress.setAttribute('aria-label', `First-day goal progress: ${step.progress.label}`)
+    guideFill.style.width = `${guidePercent(step.progress)}%`
+    guideAction.textContent = step.actionLabel
+    guideAction.disabled = false
+    guideAction.title = step.completed
+      ? 'Open the market board'
+      : step.target
+        ? `Close overlays and show the way to ${step.target.label}`
+        : step.panel
+          ? step.actionLabel
+          : 'Continue the first-day goal'
+    if (!guide.hidden) renderWaypoint()
+  }
+
+  async function bestPriceIndex(): Promise<Map<ItemId, ItemBestPrices>> {
+    if (!snapshot) return new Map()
+    try {
+      const entries = await marketQuotes(snapshot)
+      return buildBestPriceIndex(entries)
+    } catch {
+      return new Map()
+    }
+  }
 
   /* ------------------------------- HUD ----------------------------------- */
 
@@ -311,11 +736,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     townStat.value.dataset.health = next.townHealth
     townStat.sub.textContent = `Day ${next.day} · ${next.openMerchants}/${next.merchants.length} open`
 
-    if (!modeChip.isConnected) {
-      townStat.sub.append(' ', modeChip)
-    }
-
     renderTicker(next.recentEvents)
+    void renderGuide(next)
     if (activePanelBody) void refreshActivePanel()
   }
 
@@ -323,6 +745,23 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     tickerList.replaceChildren()
     const recent = [...events].slice(0, 9)
     tickerCount.textContent = recent.length > 0 ? `${events.length} recent` : 'quiet'
+    wireToggle.textContent = `Wire · ${events.length}`
+    if (events.length === 0) {
+      live.hidden = true
+    } else {
+      const latest = events[0]
+      const line = describeLiveEvent(
+        latest,
+        latest.item ? itemName(latest.item) : undefined,
+      )
+      live.hidden = false
+      live.dataset.tone = line.tone
+      liveText.textContent = line.headline
+      live.setAttribute(
+        'aria-label',
+        `Latest market event: ${line.headline}. Open the Market Wire.`,
+      )
+    }
     if (recent.length === 0) {
       const empty = $('li', 'ib-empty', 'No trades yet. Talk to a merchant or gather at the edge of town.')
       tickerList.append(empty)
@@ -331,7 +770,10 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     for (const event of recent) {
       const line = describeEvent(event, event.item ? itemName(event.item) : undefined)
       const li = $('li')
-      const row = button('', () => ui.openEvent(event), { className: 'ib-ticker-row' })
+      const row = button('', () => {
+        setWireOpen(false)
+        ui.openEvent(event)
+      }, { className: 'ib-ticker-row' })
       row.dataset.tone = line.tone
       const time = $('time', undefined, formatEventTime(event.time))
       const copy = $('div')
@@ -347,6 +789,54 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       li.append(row)
       tickerList.append(li)
     }
+  }
+
+  const applyFastForwardHud = (state: FastForwardState): void => {
+    const active = state.status === 'running' || state.status === 'paused'
+    hud.classList.toggle('is-fast-forwarding', active)
+    if (weekCompleteTimer !== null) {
+      window.clearTimeout(weekCompleteTimer)
+      weekCompleteTimer = null
+    }
+
+    if (active) {
+      const total = state.totalDays || economy.fastForward.days
+      const shownDay =
+        state.startDay > 0
+          ? Math.min(state.endDay || state.startDay + total, state.startDay + state.day)
+          : state.day
+      ffChip.hidden = false
+      ffChip.textContent =
+        state.status === 'paused'
+          ? `Paused · ${state.day}/${total}`
+          : `Fast-forwarding · ${state.day}/${total}`
+      ffChip.title = state.message
+      clockStat.value.textContent = `Day ${Math.max(1, shownDay)}`
+      clockStat.sub.textContent = `${Math.round(state.progress * 100)}% of the week`
+      const latest = state.days[state.days.length - 1]
+      if (latest) {
+        const totalMerchants =
+          snapshot?.merchants.length ?? Object.keys(economy.merchants).length
+        const health = healthFromOpenStalls(latest.merchantsOpen, totalMerchants)
+        townStat.value.textContent = townHealthLabel(health)
+        townStat.value.dataset.health = health
+        townStat.sub.textContent = `Day ${latest.day} · ${latest.merchantsOpen}/${totalMerchants} open`
+      }
+      return
+    }
+
+    if (state.status === 'done') {
+      ffChip.hidden = false
+      ffChip.textContent = 'Week complete'
+      ffChip.title = state.message
+      weekCompleteTimer = window.setTimeout(() => {
+        ffChip.hidden = true
+        weekCompleteTimer = null
+      }, 4_000)
+      return
+    }
+
+    ffChip.hidden = true
   }
 
   /* ------------------------------ panel shell ---------------------------- */
@@ -398,6 +888,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
   }
 
   const showPanel = (kind: PanelKind, shell: PanelShell): HTMLElement => {
+    setMoreMenuOpen(false)
+    setWireOpen(false)
     if (!lastFocused) lastFocused = document.activeElement as HTMLElement | null
     activeKind = kind
     panel.hidden = false
@@ -433,6 +925,8 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     if (busy || !activeKind) return
     if (activeKind === 'merchant' && activeMerchantId) {
       await renderMerchant(activeMerchantId, false)
+    } else if (activeKind === 'market') {
+      await renderMarket()
     } else if (!panel.hidden && activeKind === 'inventory') {
       await renderInventory()
     } else if (activeKind === 'recap') {
@@ -530,6 +1024,9 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       quantities = {}
     }
     activeMerchantId = merchantId
+
+    if (!snapshot) snapshot = await client.getSnapshot()
+    const bestPrices = await bestPriceIndex()
 
     const meta: HTMLElement[] = [
       $('span', `ib-chip ${merchant.open ? 'is-open' : 'is-closed'}`, merchant.open ? 'Open' : 'Closed'),
@@ -631,6 +1128,27 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     notes.hidden = true
     notes.setAttribute('aria-live', 'polite')
 
+    const appendPrice = (target: HTMLElement, current: Quote, itemId: ItemId): void => {
+      const price = $('span', 'ib-price', formatMoney(current.unitPrice, economy.currency.symbol))
+      price.append(
+        $('small', undefined, `base ${formatMoney(current.basePrice, economy.currency.symbol, 0)}`),
+      )
+      const best = bestPrices.get(itemId)
+      const isBest =
+        activeTab === 'buy'
+          ? best?.buy?.merchantId === merchantId
+          : best?.sell?.merchantId === merchantId
+      if (isBest) {
+        const tag = $('span', 'ib-best-tag', '★ Best in town')
+        tag.title =
+          activeTab === 'buy'
+            ? `Lowest ask for ${itemName(itemId)} in the square`
+            : `Highest bid for ${itemName(itemId)} in the square`
+        price.append(tag)
+      }
+      target.append(price)
+    }
+
     for (const itemId of items) {
       const quote = await client.getQuote(merchantId, itemId, activeTab, quantityFor(merchantId, itemId))
       if (!quote) continue
@@ -646,9 +1164,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
           : formatNumber(quote.constraints.playerInventory ?? 0)
 
       const priceCell = $('td', 'is-num')
-      const price = $('span', 'ib-price', formatMoney(quote.unitPrice, economy.currency.symbol))
-      price.append($('small', undefined, `base ${formatMoney(quote.basePrice, economy.currency.symbol, 0)}`))
-      priceCell.append(price)
+      appendPrice(priceCell, quote, itemId)
       wireReasonButton(priceCell, quote.reasons, quote.basePrice, itemName(itemId))
 
       const qtyCell = $('td')
@@ -679,9 +1195,7 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
         const qty = quantityFor(merchantId, itemId)
         const current = await client.getQuote(merchantId, itemId, activeTab, qty)
         priceCell.replaceChildren()
-        const priceNode = $('span', 'ib-price', formatMoney(current.unitPrice, economy.currency.symbol))
-        priceNode.append($('small', undefined, `base ${formatMoney(current.basePrice, economy.currency.symbol, 0)}`))
-        priceCell.append(priceNode)
+        appendPrice(priceCell, current, itemId)
         wireReasonButton(priceCell, current.reasons, current.basePrice, itemName(itemId))
         stepper.dataset.max = String(current.maxQuantity)
         const stepperInput = stepper.querySelector('input')
@@ -804,15 +1318,196 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
         side === 'buy'
           ? await client.buy({ merchantId, itemId, quantity })
           : await client.sell({ merchantId, itemId, quantity })
-      ui.toast(result.message, result.ok ? 'good' : 'bad')
       if (result.ok) {
+        invalidateMarketQuotes()
+        const merchant = await client.getMerchant(merchantId)
+        const followUp = tradeFollowUp({
+          side,
+          merchantName: merchant?.displayName ?? merchantId,
+          itemName: itemName(itemId),
+          stockAfter: merchant?.stock[itemId] ?? 0,
+        })
+        ui.toast(`${result.message.replace(/\s*\.\s*$/, '')}. ${followUp}`, 'good')
         quantities[keyFor(merchantId, side, itemId)] = 1
         await ui.refresh()
+      } else {
+        ui.toast(result.message, 'bad')
       }
       await renderMerchant(merchantId, false)
     } finally {
       busy = false
     }
+  }
+
+  /* ----------------------------- market panel ---------------------------- */
+
+  const navigateToMerchant = (merchantId: MerchantId, label: string): void => {
+    closePanel()
+    guide.hidden = false
+    startNavigation({ kind: 'merchant', id: merchantId, label }, false)
+  }
+
+  const renderMarket = async (force = false): Promise<void> => {
+    const data = snapshot ?? (await client.getSnapshot())
+    snapshot = data
+    const token = ++marketRenderToken
+    const body = $('div', 'ib-panel-body')
+    body.append($('p', 'ib-muted', 'Reading the latest stall quotes…'))
+
+    const shell: PanelShell = {
+      title: 'Market Board',
+      subtitle: 'Best bid and ask from every stall, read from the same quotes the counters use.',
+      size: 'wide',
+      body,
+    }
+    if (!panel.hidden && activeKind === 'market') {
+      activePanelBody = body
+      panel.replaceChildren()
+      const keepHead = $('div', 'ib-panel-head')
+      const titleWrap = $('div')
+      const heading = $('h2', undefined, shell.title)
+      heading.id = 'ib-panel-title'
+      titleWrap.append(heading, $('p', undefined, shell.subtitle ?? ''))
+      const close = button('×', closePanel, { className: 'ib-close', title: 'Close (Escape)' })
+      close.setAttribute('aria-label', 'Close panel')
+      keepHead.append(titleWrap, close)
+      panel.append(keepHead, body)
+    } else {
+      showPanel('market', shell)
+    }
+
+    let entries: MarketQuoteEntry[]
+    try {
+      entries = await marketQuotes(data, force)
+    } catch {
+      if (token !== marketRenderToken || activeKind !== 'market') return
+      body.replaceChildren(
+        $('p', 'ib-muted', 'The live quotes could not be read. Close the panel and try again.'),
+      )
+      return
+    }
+    if (token !== marketRenderToken || activeKind !== 'market' || destroyed) return
+
+    body.replaceChildren()
+    body.append(
+      $(
+        'p',
+        'ib-muted',
+        'Buy where the ask is low, sell where the bid is high. The spread is the gap between the two.',
+      ),
+    )
+
+    if (entries.length === 0) {
+      body.append($('p', 'ib-muted', 'No stalls are quoting right now.'))
+      return
+    }
+
+    const rows = buildMarketBoard(entries)
+    const routes = buildMarketRoutes(entries, rows, 3)
+
+    if (routes.length > 0) {
+      body.append($('h3', 'ib-market-heading', 'Best deals now'))
+      const dealGrid = $('div', 'ib-deal-grid')
+      for (const route of routes) {
+        dealGrid.append(marketDealCard(route))
+      }
+      body.append(dealGrid)
+    }
+
+    body.append($('h3', 'ib-market-heading', 'Every tradable item'))
+    const scroll = $('div', 'ib-market-scroll')
+    const table = $('table', 'ib-table ib-market-table')
+    const thead = $('thead')
+    const headRow = $('tr')
+    for (const label of ['Item', 'Where to get it', 'Best buy (ask)', 'Best sell (bid)', 'Spread', '']) {
+      headRow.append($('th', undefined, label))
+    }
+    thead.append(headRow)
+    const tbody = $('tbody')
+
+    for (const row of rows) {
+      const tr = $('tr')
+      const nameCell = $('td')
+      const name = $('div', 'ib-item-name')
+      name.append(document.createTextNode(row.displayName), $('small', undefined, row.category))
+      nameCell.append(name)
+      nameCell.append($('small', 'ib-market-item-copy', row.description))
+      const whereCell = $('td', 'ib-market-where', row.where)
+      const buyCell = marketSideCell(row.bestBuy)
+      const sellCell = marketSideCell(row.bestSell)
+      const spreadCell = $('td', 'is-num')
+      const spread = $(
+        'span',
+        row.profitable ? 'ib-spread-up' : 'ib-spread-down',
+        `${row.spread > 0.005 ? '+' : ''}${formatMoney(row.spread, economy.currency.symbol)}`,
+      )
+      spreadCell.append(
+        spread,
+        $('small', 'ib-market-spread-pct', signedPercent(row.spreadPct)),
+      )
+      const actionCell = $('td', 'is-num')
+      const destination = row.bestSell ?? row.bestBuy
+      if (destination) {
+        const go = button('Go', () => navigateToMerchant(destination.merchantId, destination.merchantName), {
+          className: 'ib-button is-small',
+          title: `Close the board and show the way to ${destination.merchantName}`,
+        })
+        go.setAttribute('aria-label', `Go to ${destination.merchantName} for ${row.displayName}`)
+        actionCell.append(go)
+      }
+      tr.append(nameCell, whereCell, buyCell, sellCell, spreadCell, actionCell)
+      tbody.append(tr)
+    }
+
+    table.append(thead, tbody)
+    scroll.append(table)
+    body.append(scroll)
+    body.append(
+      $(
+        'p',
+        'ib-market-foot',
+        'Prices move with stock, demand and merchant cash. Reopen Market (M) for fresh quotes.',
+      ),
+    )
+  }
+
+  const marketDealCard = (route: MarketRoute): HTMLElement => {
+    const card = $('article', 'ib-deal')
+    card.dataset.kind = route.kind
+    const head = $('div', 'ib-deal-head')
+    const kind = $(
+      'span',
+      'ib-deal-kind',
+      route.kind === 'trade' ? 'Spread' : route.kind === 'craft' ? 'Craft' : 'Gather & sell',
+    )
+    head.append(kind, $('span', 'ib-deal-profit', route.profitLabel))
+    card.append(
+      head,
+      $('h4', undefined, route.title),
+      $('p', undefined, route.detail),
+      button(
+        route.actionLabel,
+        () => navigateToMerchant(route.target.merchantId, route.target.merchantName),
+        {
+          className: 'ib-button is-small is-primary',
+          title: `Close the board and show the way to ${route.target.merchantName}`,
+        },
+      ),
+    )
+    return card
+  }
+
+  const marketSideCell = (side: MarketSide | null): HTMLElement => {
+    const cell = $('td', 'ib-market-side')
+    if (!side) {
+      cell.append($('span', 'ib-muted', '—'))
+      return cell
+    }
+    cell.append(
+      $('strong', undefined, side.merchantName),
+      $('small', undefined, formatMoney(side.unitPrice, economy.currency.symbol)),
+    )
+    return cell
   }
 
   /* --------------------------- inventory panel --------------------------- */
@@ -1028,18 +1723,98 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     })
   }
 
+  /* ------------------------------- help panel ---------------------------- */
+
+  const renderHelp = (): void => {
+    const body = $('div', 'ib-panel-body')
+    body.append(
+      $(
+        'p',
+        'ib-muted',
+        'You run a trader in a small market town. The stalls trade while you are away, so a quiet week can change every price.',
+      ),
+    )
+
+    const steps = $('ol', 'ib-help-steps')
+    for (const [label, copy] of helpSteps) {
+      const item = $('li')
+      item.append($('strong', undefined, label), $('span', undefined, copy))
+      steps.append(item)
+    }
+    body.append(steps)
+
+    const grid = $('div', 'ib-grid cols-2')
+    const keys = $('div', 'ib-card')
+    keys.append($('h3', undefined, 'Controls'))
+    const keyList = $('ul', 'ib-list')
+    for (const [key, action] of [
+      ['WASD / arrows', 'Move around the square'],
+      ['E / Space', 'Interact with a stall or resource'],
+      ['I', 'Open your bag and workshop'],
+      ['M', 'Open the market board and best deals'],
+      ['O', 'Open the guild order board'],
+      ['T', 'Meet the townsfolk'],
+      ['F', `Run the ${economy.fastForward.days}-day fast-forward`],
+      ['R', 'Read the town recap'],
+      ['Esc', 'Close a panel or drawer'],
+    ]) {
+      const li = $('li')
+      li.append($('span', undefined, action), $('kbd', undefined, key))
+      keyList.append(li)
+    }
+    keys.append(keyList)
+
+    const goal = $('div', 'ib-card')
+    goal.append($('h3', undefined, 'Your goal'))
+    goal.append(
+      $(
+        'p',
+        undefined,
+        'Buy goods where they are cheap, sell where they are dear, gather raw materials, and keep an eye on the town as stalls run short of cash. The First day card tracks one next step; Market (M) compares every stall for you.',
+      ),
+    )
+    goal.append(
+      $(
+        'p',
+        'ib-muted',
+        'Fast-forwarding moves the actual townsfolk on the server map, so every player sees the same week play out.',
+      ),
+    )
+    grid.append(keys, goal)
+    body.append(grid)
+
+    showPanel('help', {
+      title: 'How to Play',
+      subtitle: 'A quick tour before your first trade.',
+      body,
+    })
+  }
+
   /* -------------------------- fast-forward panel ------------------------- */
 
   const renderFastForward = (): void => {
     const state = client.fastForward.getState()
-    const body = $('div', 'ib-panel-body')
+    const body = $('div', 'ib-panel-body ib-ff-panel')
+    const totalDays = state.totalDays || economy.fastForward.days
+    const active = state.status === 'running' || state.status === 'paused'
+    const shownDay =
+      state.startDay > 0
+        ? Math.min(state.endDay || state.startDay + totalDays, state.startDay + state.day)
+        : state.day
 
     const intro = $('p', 'ib-muted')
     intro.textContent =
       client.mode === 'server'
-        ? 'Simulate seven days of town trade on the authoritative server. Townsfolk trade, caravans restock, rent is paid, and stalls can close.'
-        : 'Simulate seven days of town trade. The mock timeline is deterministic: townsfolk trade, caravans restock, rent is paid, and stalls can close.'
+        ? `Run ${economy.fastForward.days} days on the authoritative server. Bots walk the square as the days reveal, then the live market resumes.`
+        : `Run ${economy.fastForward.days} days in the local demo. The timeline is deterministic, but server map actors are unavailable in mock mode.`
     body.append(intro)
+
+    const statusRow = $('div', 'ib-ff-status')
+    statusRow.append(
+      $('strong', 'ib-ff-day', `Day ${Math.max(1, shownDay)}`),
+      $('span', 'ib-muted', state.message),
+    )
+    body.append(statusRow)
 
     const progress = $('div', 'ib-progress')
     progress.setAttribute('role', 'progressbar')
@@ -1055,76 +1830,76 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       $(
         'div',
         'ib-muted',
-        `${state.day} / ${state.totalDays || economy.fastForward.days} days · ${Math.round(state.progress * 100)}%`,
+        `${state.day} / ${totalDays} days revealed · ${Math.round(state.progress * 100)}%`,
       ),
     )
 
+    if (totalDays > 1) {
+      const strip = $('ol', 'ib-ff-days')
+      for (let index = 1; index <= totalDays; index += 1) {
+        const item = $('li', index <= state.day ? 'is-done' : 'is-pending')
+        item.textContent = `D${index + Math.max(0, state.startDay - 1)}`
+        item.title = `Day ${index + Math.max(0, state.startDay - 1)}`
+        strip.append(item)
+      }
+      body.append(strip)
+    }
+
     const controls = $('div', 'ib-controls')
-    const runButton = button(
-      state.status === 'running' ? 'Running…' : `Run ${economy.fastForward.days} days`,
-      () => {
-        void client.fastForward.start(economy.fastForward.days).then(() => {
-          void ui.refresh()
-          if (activeKind === 'fastforward') renderFastForward()
-        })
-      },
-      { className: 'ib-button is-primary', disabled: state.status === 'running' },
-    )
-    const pauseButton = button(
-      'Pause',
-      () => {
-        client.fastForward.pause()
-        renderFastForward()
-      },
-      { className: 'ib-button', disabled: state.status !== 'running' },
-    )
-    const resumeButton = button(
-      'Resume',
-      () => {
-        void client.fastForward.resume()
-      },
-      { className: 'ib-button', disabled: state.status !== 'paused' },
-    )
-    const stepButton = button(
-      'Step 1 day',
-      () => {
-        void client.fastForward.step().then(next => {
-          if (next.status === 'done') {
-            void ui.refresh().then(() => {
-              if (activeKind === 'fastforward') renderFastForward()
-            })
-          }
-        })
-      },
-      { className: 'ib-button' },
-    )
-    controls.append(runButton, pauseButton, resumeButton, stepButton)
-    if (state.recap) {
+    if (active) {
       controls.append(
-        button('Read the recap', () => void ui.openRecap(), { className: 'ib-button' }),
+        button('Skip to end', () => client.fastForward.skip(), {
+          className: 'ib-button is-primary',
+        }),
       )
+      if (client.mode === 'mock') {
+        if (state.status === 'paused') {
+          controls.append(
+            button('Resume', () => {
+              void client.fastForward.resume()
+            }, { className: 'ib-button is-quiet' }),
+          )
+        } else {
+          controls.append(
+            button('Pause', () => client.fastForward.pause(), {
+              className: 'ib-button is-quiet',
+            }),
+          )
+        }
+      }
+    } else {
+      controls.append(
+        button(`Run ${economy.fastForward.days} days`, () => {
+          // Close the panel so the map playback is visible. The HUD chip keeps
+          // showing day/progress, and Week/F reopens this panel for Skip.
+          closePanel()
+          void client.fastForward
+            .start(economy.fastForward.days)
+            .then(() => ui.refresh())
+        }, { className: 'ib-button is-primary' }),
+        button('Step 1 day', () => {
+          void client.fastForward.step().then(next => {
+            if (next.status === 'done') void ui.refresh()
+          })
+        }, { className: 'ib-button is-small is-quiet' }),
+      )
+      if (state.recap && state.status === 'done') {
+        controls.append(
+          button('Read the recap', () => void ui.openRecap(), {
+            className: 'ib-button is-quiet',
+          }),
+        )
+      }
     }
     body.append(controls)
     body.append($('div', 'ib-status-line', state.message))
 
-    if (state.days.length > 0) {
-      const dayGrid = $('div', 'ib-grid cols-3')
-      for (const day of state.days.slice(-3)) {
-        const card = $('div', 'ib-card')
-        card.append($('h3', undefined, `Day ${day.day}`))
-        card.append($('strong', undefined, `${day.merchantsOpen} open`))
-        card.append(
-          $('p', 'ib-muted', `${day.bankruptcies} closed · ${day.tradeVolume} units traded`),
-        )
-        dayGrid.append(card)
-      }
-      body.append(dayGrid)
-    }
-
     const stream = $('ol', 'ib-day-stream')
-    const events = [...state.events].slice(-46).reverse()
+    const events = [...state.events].slice(-12).reverse()
     if (events.length === 0) {
-      stream.append($('li', 'ib-empty', 'The event stream appears here while the week runs.'))
+      stream.append(
+        $('li', 'ib-empty', 'Events appear here as each day reveals.'),
+      )
     }
     for (const entry of events) {
       const line = describeEvent(entry.event, entry.event.item ? itemName(entry.event.item) : undefined)
@@ -1146,7 +1921,10 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
     const shell: PanelShell = {
       title: 'Fast-Forward the Week',
-      subtitle: `Seven days in about ${economy.fastForward.durationSeconds}s · ${economy.fastForward.stepSeconds}s ticks`,
+      subtitle:
+        client.mode === 'server'
+          ? `Seven days in about ${Math.round(FAST_FORWARD_PLAYBACK_MS / 1000)}s · live map playback`
+          : 'Seven days in the local demo · map actors unavailable',
       size: 'wide',
       body,
     }
@@ -1176,8 +1954,9 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
 
   const renderFastForwardFrom = (state: FastForwardState): void => {
     if (activeKind !== 'fastforward') return
-    // Repaint only when the day or status changes to avoid stealing focus.
-    const marker = `${state.status}:${state.day}:${state.events.length}`
+    // Repaint when a day, status or visible progress step changes. The panel is
+    // only a readout during playback, so replacing it does not steal input.
+    const marker = `${state.status}:${state.day}:${state.events.length}:${Math.round(state.progress * 20)}`
     if (panel.dataset.marker === marker) return
     panel.dataset.marker = marker
     renderFastForward()
@@ -1498,8 +2277,27 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
         event.stopImmediatePropagation()
         return
       }
+      if (moreOpen) {
+        closeMoreMenu()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+      if (wireOpen) {
+        setWireOpen(false)
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
       if (!panel.hidden) {
         closePanel()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+      }
+      return
+    }
+    if (moreOpen) {
+      if (!isTypingTarget(event.target) && isGameKey(event)) {
         event.preventDefault()
         event.stopImmediatePropagation()
       }
@@ -1526,6 +2324,9 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     if (key === 'i') {
       event.preventDefault()
       ui.openInventory()
+    } else if (key === 'm') {
+      event.preventDefault()
+      void ui.openMarket()
     } else if (key === 'o') {
       event.preventDefault()
       ui.openOrders()
@@ -1541,8 +2342,29 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     }
   }
 
+  const onDocumentPointerDown = (event: PointerEvent): void => {
+    const target = event.target as Node | null
+    if (
+      moreOpen &&
+      target &&
+      !moreMenu.contains(target) &&
+      !moreButton.contains(target)
+    ) {
+      setMoreMenuOpen(false)
+    }
+    if (
+      wireOpen &&
+      target &&
+      !ticker.contains(target) &&
+      !wireToggle.contains(target)
+    ) {
+      setWireOpen(false)
+    }
+  }
+
   window.addEventListener('keydown', onKeyDown, true)
   window.addEventListener('resize', hideTooltip)
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
 
   const onScrimClick = () => closePanel()
   scrim.addEventListener('click', onScrimClick)
@@ -1581,11 +2403,18 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
     void refresh()
   })
 
+  fastForwardHudUnsub = client.fastForward.onChange(applyFastForwardHud)
+  applyFastForwardHud(client.fastForward.getState())
+
   const ui: IronblockUI = {
     async openMerchant(id) {
       activeTab = 'buy'
       quantities = {}
       await renderMerchant(id, true)
+    },
+    async openMarket() {
+      activeKind = 'market'
+      await renderMarket(true)
     },
     openInventory() {
       void renderInventory()
@@ -1621,6 +2450,17 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       promptLabel.textContent = promptData.label
       promptHint.textContent = promptData.hint ?? ''
     },
+    setWaypoint(waypoint) {
+      currentWaypoint = waypoint
+      renderWaypoint()
+    },
+    showGuide() {
+      openGuide()
+    },
+    isFastForwarding() {
+      const status = client.fastForward.getState().status
+      return status === 'running' || status === 'paused'
+    },
     toast(message, tone = 'neutral') {
       const toast = $('div', 'ib-toast', message)
       toast.dataset.tone = tone
@@ -1635,21 +2475,19 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       destroyed = true
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('resize', hideTooltip)
+      document.removeEventListener('pointerdown', onDocumentPointerDown, true)
       scrim.removeEventListener('click', onScrimClick)
       withdrawOverlay.removeEventListener('click', onWithdrawOverlayClick)
+      if (weekCompleteTimer !== null) window.clearTimeout(weekCompleteTimer)
       closeWithdraw()
       fastForwardUnsub?.()
+      fastForwardHudUnsub?.()
       unsubscribe()
       root.remove()
     },
   }
 
   void refresh()
-
-  // Announce the interaction keys once so the demo is self-explanatory.
-  window.setTimeout(() => {
-    ui.toast('Walk with arrow keys. Press E or Space near a stall to trade.', 'neutral')
-  }, 900)
 
   return ui
 }

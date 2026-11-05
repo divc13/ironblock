@@ -20,6 +20,7 @@ import type {
   ResourceId,
   TradeSide,
 } from '../types'
+import { sampleFastForwardEvents } from './fast-forward'
 import { fingerprintConfig } from './fingerprint'
 import { DeterministicRng } from './rng'
 import {
@@ -1693,10 +1694,17 @@ export class EconomyEngine {
       caravanArrivals: summary.caravan.arrivals,
       sinkTotal: summary.sinks.total,
     }))
-    let events = this.state.events.filter(event => event.sequence > startSequence)
-    events = events.slice(-eventSample)
+    const windowEvents = this.state.events.filter(
+      event => event.sequence > startSequence,
+    )
+    const events = sampleFastForwardEvents(
+      windowEvents,
+      eventSample,
+      fromTime,
+      this.state.time,
+    )
     if (!events.some(event => event.sequence === finalEvent.sequence)) {
-      events = [...events.slice(-(eventSample - 1)), finalEvent]
+      events.splice(Math.max(0, events.length - 1), 1, finalEvent)
     }
 
     return {

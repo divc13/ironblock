@@ -157,7 +157,7 @@ export interface FastForwardDay {
 
 export interface FastForwardState {
   status: FastForwardStatus
-  /** Last fully completed day. */
+  /** Revealed day count within this run (0 while the POST is in flight). */
   day: number
   totalDays: number
   /** 0..1 completion across the requested days. */
@@ -166,6 +166,18 @@ export interface FastForwardState {
   events: FastForwardEvent[]
   recap: SessionRecap | null
   message: string
+  /** In-game time at the start of the simulated window, in seconds. */
+  fromTime: number
+  /** In-game time at the end of the simulated window, in seconds. */
+  toTime: number
+  /** Absolute day the run started from. */
+  startDay: number
+  /** Absolute day the simulated window ends on. */
+  endDay: number
+  /** Wall-clock reveal/playback length used by the client and server. */
+  revealDurationMs: number
+  /** Whether server-authoritative map actors move during the reveal. */
+  worldPlayback: 'server' | 'unavailable'
 }
 
 export interface RecapTopMover {
@@ -212,6 +224,8 @@ export interface FastForwardClient {
   pause(): void
   resume(): Promise<FastForwardState>
   step(): Promise<FastForwardState>
+  /** Reveal the remaining days/events immediately (server map playback may finish on its own). */
+  skip(): void
   getState(): FastForwardState
   onChange(listener: (state: FastForwardState) => void): () => void
 }

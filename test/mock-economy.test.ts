@@ -192,6 +192,12 @@ test('fast-forward runs deterministically and produces a recap', async () => {
   assert.ok(run.recap)
   assert.ok(run.recap.trades.count >= 0)
   assert.ok(run.events.some(entry => entry.event.type === 'caravan.arrival'))
+  assert.equal(run.worldPlayback, 'unavailable')
+  assert.equal(run.startDay, 1)
+  assert.equal(run.endDay, 3)
+  assert.equal(run.fromTime, 8 * 3_600)
+  assert.equal(run.toTime, 8 * 3_600 + 2 * 86_400)
+  assert.ok(run.revealDurationMs >= 0)
 
   const recap = await first.getRecap()
   assert.ok(recap.headline.length > 0)
