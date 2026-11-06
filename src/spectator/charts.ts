@@ -99,6 +99,9 @@ export interface VolumeChartOptions {
 const esc = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+/** Every price SVG needs its own clip id; two charts share the page. */
+let priceClipSequence = 0
+
 const dayLabel = (time: number): string => `D${Math.floor(time / 86400) + 1}`
 
 const timeLabel = (time: number): string => {
@@ -464,6 +467,7 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
   const summary =
     options.ariaLabel ??
     `Price chart indexed to each item's first recorded quote${hasPoints ? ` for ${series.length} items` : ''}.`
+  const clipId = `price-reveal-clip-${(priceClipSequence += 1)}`
 
   return `<svg class="chart-svg price-svg" viewBox="0 0 ${width} ${height}" role="group" aria-label="${esc(
     summary,
@@ -471,7 +475,7 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
     <title>${esc(summary)}</title>
     <desc>${esc(options.emptyText ?? 'Recorded merchant quotes across the week.')}</desc>
     <defs>
-      <clipPath id="price-reveal-clip">
+      <clipPath id="${clipId}">
         <rect class="price-clip-rect" x="${plotLeft}" y="${pad.top - 12}" width="${(plotW * reveal).toFixed(
           1,
         )}" height="${plotH + 24}"/>
@@ -479,7 +483,7 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
     </defs>
     <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="12" fill="rgba(255,255,255,0.012)"/>
     ${grid}${xLabels}${markers}
-    <g clip-path="url(#price-reveal-clip)">${priceSeries}</g>
+    <g clip-path="url(#${clipId})">${priceSeries}</g>
     <g class="price-start-layer">${startLayer}</g>
     ${playhead}
     ${bands}
@@ -1015,42 +1019,79 @@ export function renderRiskScatter(points: RiskPoint[], options: RiskChartOptions
       { x: x - radius - 9, y: y + 3, anchor: 'end' },
       { x, y: y + radius + 12, anchor: 'middle' },
     ]
-    for (let step = 1; step <= 4; step += 1) {
-      candidates.push({ x, y: y - radius - 8 - step * 12, anchor: 'middle' })
-      candidates.push({ x, y: y + radius + 12 + step * 12, anchor: 'middle' })
-    }
-    let choice = candidates[0]
-    for (const candidate of candidates) {
-      const width = 9
-      const height = 10
-      const left =
-        candidate.anchor === 'middle'
-          ? candidate.x - width / 2
-          : candidate.anchor === 'start'
-            ? candidate.x
-            : candidate.x - width
-      const right = left + width
-      const top = candidate.y - height / 2
-      const bottom = top + height
-      const outside =
-        left < plotLeft + 1 || right > plotRight - 1 || top < pad.top + 1 || bottom > plotBottom - 1
-      const overlaps = occupied.some(
-        rect => left < rect.right + 2 && right > rect.left - 2 && top < rect.bottom + 1 && bottom > rect.top - 1,
+    // Clamped bubbles can sit flush against the right edge, where centred
+    // labels fall outside the plot. Side and vertical candidates give the
+    // collision pass a way to slide the badge inward without moving the dot.
+    for (let step = 1; step <= 10; step += 1) {
+      const offset = step * 12
+      const sideUp = y + 3 - offset
+      const sideDown = y + 3 + offset
+      candidates.push(
+        { x: x - radius - 9, y: sideUp, anchor: 'end' },
+        { x: x - radius - 9, y: sideDown, anchor: 'end' },
+        { x: x + radius + 9, y: sideUp, anchor: 'start' },
+        { x: x + radius + 9, y: sideDown, anchor: 'start' },
+        { x, y: y - radius - 8 - offset, anchor: 'middle' },
+        { x, y: y + radius + 12 + offset, anchor: 'middle' },
       )
-      if (!outside && !overlaps) {
+    }
+    const rectFor = (candidate: { x: number; y: number; anchor: 'start' | 'middle' | 'end' }) => {
+      const left =
+        candidate.anchor === 'middle' ? candidate.x - 4.5 : candidate.anchor === 'start' ? candidate.x : candidate.x - 9
+      return { left, right: left + 9, top: candidate.y - 5, bottom: candidate.y + 5 }
+    }
+    const outsidePlot = (rect: { left: number; right: number; top: number; bottom: number }): boolean =>
+      rect.left < plotLeft + 1 || rect.right > plotRight - 1 || rect.top < pad.top + 1 || rect.bottom > plotBottom - 1
+    const overlapsLabel = (rect: { left: number; right: number; top: number; bottom: number }): boolean =>
+      occupied.some(
+        occupiedRect =>
+          rect.left < occupiedRect.right + 2 &&
+          rect.right > occupiedRect.left - 2 &&
+          rect.top < occupiedRect.bottom + 1 &&
+          rect.bottom > occupiedRect.top - 1,
+      )
+    let choice: { x: number; y: number; anchor: 'start' | 'middle' | 'end' } | null = null
+    let closest = Number.POSITIVE_INFINITY
+    for (const candidate of candidates) {
+      const rect = rectFor(candidate)
+      if (outsidePlot(rect) || overlapsLabel(rect)) continue
+      const distance = Math.hypot(candidate.x - x, candidate.y - y)
+      if (distance < closest) {
         choice = candidate
-        break
+        closest = distance
       }
     }
-    const badgeWidth = 9
-    const badgeHeight = 10
-    const left =
-      choice.anchor === 'middle'
-        ? choice.x - badgeWidth / 2
-        : choice.anchor === 'start'
-          ? choice.x
-          : choice.x - badgeWidth
-    occupied.push({ left, right: left + badgeWidth, top: choice.y - badgeHeight / 2, bottom: choice.y + badgeHeight / 2 })
+    if (!choice) {
+      // Extremely dense maps can exhaust the ring. Keep the badge inside the
+      // plot and choose the least-overlapping fallback rather than stacking a
+      // second badge on the exact same coordinate.
+      let bestPenalty = Number.POSITIVE_INFINITY
+      for (const candidate of candidates) {
+        const rect = rectFor(candidate)
+        const outsideDistance = Math.max(
+          0,
+          plotLeft + 1 - rect.left,
+          rect.right - (plotRight - 1),
+          pad.top + 1 - rect.top,
+          rect.bottom - (plotBottom - 1),
+        )
+        const overlapCount = occupied.filter(
+          occupiedRect =>
+            rect.left < occupiedRect.right + 2 &&
+            rect.right > occupiedRect.left - 2 &&
+            rect.top < occupiedRect.bottom + 1 &&
+            rect.bottom > occupiedRect.top - 1,
+        ).length
+        const penalty =
+          outsideDistance * 1000 + overlapCount * 200 + Math.hypot(candidate.x - x, candidate.y - y)
+        if (penalty < bestPenalty) {
+          bestPenalty = penalty
+          choice = candidate
+        }
+      }
+    }
+    const chosen = choice ?? candidates[0]
+    occupied.push(rectFor(chosen))
     placements.push({
       index,
       x,
@@ -1058,10 +1099,10 @@ export function renderRiskScatter(points: RiskPoint[], options: RiskChartOptions
       radius,
       tone,
       color,
-      labelX: choice.x,
-      labelY: choice.y,
-      anchor: choice.anchor,
-      leader: Math.hypot(choice.x - x, choice.y - y) > radius + 7,
+      labelX: chosen.x,
+      labelY: chosen.y,
+      anchor: chosen.anchor,
+      leader: Math.hypot(chosen.x - x, chosen.y - y) > radius + 7,
     })
   }
 

@@ -355,6 +355,12 @@ export interface EconomyFastForwardResult {
   summaries: DaySummary[]
   series: FastForwardSeriesPoint[]
   priceHistory: FastForwardPriceSnapshot[]
+  /**
+   * Every scenario shock that actually fired during the run, before event
+   * sampling. Server-side annotation uses this as evidence so a sampled-out
+   * shock can still be marked without inventing configured-but-skipped ones.
+   */
+  shockEvents?: SequencedMarketEvent[]
   events: SequencedMarketEvent[]
   eventCount: number
   finalSequence: number

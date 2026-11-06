@@ -1635,6 +1635,10 @@ export class EconomyEngine {
     const beforeStock = totalStockOf(this.state)
     const beforePlayerCash = totalPlayerCash(this.state)
     const priceHistory: FastForwardPriceSnapshot[] = []
+    // Scenario shocks are recorded from the live step output rather than the
+    // sampled event list: sampling may drop a shock, and the retained event
+    // buffer may evict it on a long run. Annotations need exact evidence.
+    const shockEvents: SequencedMarketEvent[] = []
     let lastSummaryDay = this.state.summaries.length > 0
       ? this.state.summaries[this.state.summaries.length - 1].day
       : this.state.day - 1
@@ -1643,15 +1647,23 @@ export class EconomyEngine {
     let executedSteps = 0
     while (elapsed < totalSeconds - 1e-9) {
       const step = Math.min(this.config.fastForward.stepSeconds, totalSeconds - elapsed)
-      this.advanceStep(step, [])
-      const latestSummary = this.state.summaries[this.state.summaries.length - 1]
-      if (latestSummary && latestSummary.day !== lastSummaryDay) {
+      const stepEvents: SequencedMarketEvent[] = []
+      this.advanceStep(step, stepEvents)
+      for (const event of stepEvents) {
+        if (event.type === 'system.shock') shockEvents.push(event)
+      }
+      // Normally one day closes per step, but capture every new summary so a
+      // larger configured step size still yields complete day coverage.
+      const newSummaries = this.state.summaries.filter(
+        summary => summary.day > lastSummaryDay,
+      )
+      for (const summary of newSummaries) {
         priceHistory.push({
-          day: latestSummary.day,
-          endedAt: latestSummary.endedAt,
+          day: summary.day,
+          endedAt: summary.endedAt,
           prices: this.capturePriceSnapshot(),
         })
-        lastSummaryDay = latestSummary.day
+        lastSummaryDay = summary.day
       }
       elapsed += step
       executedSteps += 1
@@ -1733,6 +1745,7 @@ export class EconomyEngine {
       summaries,
       series,
       priceHistory: cloneJson(priceHistory),
+      shockEvents: cloneJson(shockEvents),
       events: cloneJson(events),
       eventCount: this.state.sequence - startSequence,
       finalSequence: this.state.sequence,
@@ -1758,6 +1771,7 @@ export class EconomyEngine {
       summaries: [],
       series: [],
       priceHistory: [],
+      shockEvents: [],
       events: [],
       eventCount: 0,
       finalSequence: this.state.sequence,
@@ -3020,8 +3034,14 @@ export class EconomyEngine {
 
   private capturePriceSnapshot(): Record<string, { bid: number | null; ask: number | null }> {
     const snapshot: Record<string, { bid: number | null; ask: number | null }> = {}
-    for (const merchant of Object.values(this.state.merchants)) {
+    // Sort merchants and items so the key order is stable regardless of how a
+    // loaded snapshot happened to order merchant object keys.
+    const merchants = Object.values(this.state.merchants).sort((left, right) =>
+      stableCompare(left.id, right.id),
+    )
+    for (const merchant of merchants) {
       const merchantConfig = this.config.merchants[merchant.id]
+      if (!merchantConfig) continue
       const itemIds = Array.from(
         new Set([...merchantConfig.buys, ...merchantConfig.sells]),
       ).sort(stableCompare)

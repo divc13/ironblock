@@ -282,6 +282,14 @@ test('fast-forward clone annotations tell the causal story', () => {
 })
 
 test('fast-forward captures sanitized item prices at every simulated close', () => {
+  const config = cloneConfig()
+  const expectedKeys = Object.values(config.merchants)
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+    .flatMap(merchant =>
+      [...new Set([...merchant.buys, ...merchant.sells])]
+        .sort()
+        .map(itemId => `${merchant.id}:${itemId}`),
+    )
   const source = makeSource()
   const first = runFastForwardClone(asObservabilitySource(source as never), {})
   const second = runFastForwardClone(asObservabilitySource(source as never), {})
@@ -297,6 +305,8 @@ test('fast-forward captures sanitized item prices at every simulated close', () 
     assert.equal(point.day, first.startDay + index)
     assert.ok(point.endedAt > 0)
     const quotes = Object.entries(point.prices)
+    // Complete item x day coverage with stable merchant:item key ordering.
+    assert.deepEqual(Object.keys(point.prices), expectedKeys)
     assert.ok(quotes.length > 0)
     for (const [key, quote] of quotes) {
       assert.match(key, /^[a-z0-9_-]+:[a-z0-9_-]+$/)
@@ -310,26 +320,136 @@ test('fast-forward captures sanitized item prices at every simulated close', () 
   const raw = JSON.stringify(first.priceHistory)
   assert.equal(raw.includes('player-secret'), false)
   assert.equal(raw.includes('secret-email@example.com'), false)
+
+  // Object key order in a loaded snapshot must not leak into the price keys.
+  const shuffledState = source.snapshot()
+  shuffledState.merchants = Object.fromEntries(Object.entries(shuffledState.merchants).reverse())
+  const shuffled = runFastForwardClone(
+    asObservabilitySource(new EconomyEngine(source.config, { state: shuffledState }) as never),
+    {},
+  )
+  assert.equal(shuffled.ok, true)
+  if (!shuffled.ok) return
+  for (const point of shuffled.priceHistory) {
+    assert.deepEqual(Object.keys(point.prices), expectedKeys)
+  }
+})
+
+test('live snapshots never carry preview price history', async () => {
+  const source = makeSource()
+  const liveBefore = source.snapshot()
+  const preview = runFastForwardClone(asObservabilitySource(source as never), {})
+  assert.equal(preview.ok, true)
+  if (!preview.ok) return
+  assert.equal('priceHistory' in preview, true)
+  assert.equal('shockEvents' in preview, false, 'internal shock evidence stays server-side')
+
+  const result = await handleObservabilityRequest(context(source), request('/snapshot'))
+  if (result.kind !== 'json') return assert.fail()
+  const raw = JSON.stringify(result.body)
+  assert.equal(raw.includes('"priceHistory"'), false)
+  assert.equal(raw.includes('"shockEvents"'), false)
+  assert.deepEqual(source.snapshot(), liveBefore)
 })
 
 test('fast-forward annotations include scenario shocks exactly once', () => {
+  const config = cloneConfig()
   const source = makeSource()
   const result = runFastForwardClone(asObservabilitySource(source as never), {})
   assert.equal(result.ok, true)
   if (!result.ok) return
   const shocks = result.annotations.filter(annotation => annotation.kind === 'shock')
-  assert.equal(shocks.length, cloneConfig().scenario.shocks.length)
+  assert.equal(shocks.length, config.scenario.shocks.length)
+  assert.equal(new Set(shocks.map(annotation => annotation.eventId)).size, shocks.length)
   for (const shock of shocks) {
     assert.ok(shock.title.length > 0)
     assert.ok(shock.chain.length > 0)
+    assert.ok(shock.eventId)
     assert.ok(Number.isFinite(shock.time))
   }
+  for (const configured of config.scenario.shocks) {
+    assert.equal(
+      shocks.filter(annotation => annotation.chain.includes(configured.message)).length,
+      1,
+      `expected one observed annotation for ${configured.id}`,
+    )
+  }
 
-  // Event sampling can miss a shock; the config fallback must still annotate it.
-  const fallback = buildAnnotations([], [], cloneConfig(), 0, 8 * 86_400)
-  const fallbackShocks = fallback.filter(annotation => annotation.kind === 'shock')
-  assert.equal(fallbackShocks.length, cloneConfig().scenario.shocks.length)
-  assert.ok(fallbackShocks.every(annotation => annotation.eventId === null && annotation.sequence === 0))
+  // A config-only timestamp is not evidence. Without an observed event the
+  // builder must not invent a shock annotation.
+  const noEvidence = buildAnnotations([], [], config, 0, 8 * 86_400)
+  assert.equal(noEvidence.filter(annotation => annotation.kind === 'shock').length, 0)
+  const outOfWindow = buildAnnotations([], [], config, 20 * 86_400, 27 * 86_400)
+  assert.equal(outOfWindow.filter(annotation => annotation.kind === 'shock').length, 0)
+})
+
+test('shock annotations ignore a configured shock the clone skipped', () => {
+  const config = cloneConfig()
+  const [skipped, observed] = config.scenario.shocks
+  assert.ok(skipped && observed)
+  const skippedAt = (skipped.day - 1) * 86_400 + skipped.atSecond
+
+  // Apply the first shock in the live world, leaving the clone starting exactly
+  // at its timestamp. The old config fallback treated `time === fromTime` as
+  // in-window and annotated it again even though the engine skipped it.
+  const engine = new EconomyEngine(config)
+  const tick = engine.tick(skippedAt)
+  assert.equal(tick.success, true)
+  assert.ok(engine.snapshot().scenario.appliedShockIds.includes(skipped.id))
+
+  const source = new EconomyEngine(config, { state: engine.snapshot() })
+  const result = runFastForwardClone(asObservabilitySource(source as never), {})
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  const shocks = result.annotations.filter(annotation => annotation.kind === 'shock')
+  assert.equal(
+    shocks.some(annotation => annotation.chain.includes(skipped.message)),
+    false,
+    'an already-applied shock must not be re-annotated',
+  )
+  assert.equal(
+    shocks.filter(annotation => annotation.chain.includes(observed.message)).length,
+    1,
+    'the genuinely observed shock still gets exactly one marker',
+  )
+})
+
+test('shock markers are absent when configured shocks predate the clone window', () => {
+  const config = cloneConfig()
+  const engine = new EconomyEngine(config)
+  assert.equal(engine.tick(6 * 86_400).success, true)
+  const source = new EconomyEngine(config, { state: engine.snapshot() })
+  const result = runFastForwardClone(asObservabilitySource(source as never), {})
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(
+    result.annotations.filter(annotation => annotation.kind === 'shock').length,
+    0,
+    'out-of-window shocks must not be forced into the preview',
+  )
+})
+
+test('sampled and unsampled shock evidence dedupe exactly once', () => {
+  const config = cloneConfig()
+  const engine = new EconomyEngine(config)
+  const run = engine.fastForward(config.fastForward.days)
+  assert.equal(run.success, true)
+  const shockEvents = run.shockEvents ?? []
+  assert.ok(shockEvents.length > 0)
+  // Passing the same event as both sampled and authoritative evidence must not
+  // double-count it.
+  const annotations = buildAnnotations(
+    shockEvents,
+    run.summaries,
+    config,
+    run.fromTime,
+    run.toTime,
+    shockEvents,
+  )
+  const shocks = annotations.filter(annotation => annotation.kind === 'shock')
+  assert.equal(shocks.length, shockEvents.length)
+  assert.equal(new Set(shocks.map(annotation => annotation.eventId)).size, shockEvents.length)
+  assert.ok(shocks.every(annotation => annotation.eventId !== null))
 })
 
 test('fast-forward validates days and rejects bad input', () => {

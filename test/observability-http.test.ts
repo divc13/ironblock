@@ -63,6 +63,7 @@ describe('observability HTTP middleware', () => {
     const raw = JSON.stringify(body)
     assert.equal(raw.includes('player-secret'), false)
     assert.equal(raw.includes('secret-mail@nowhere.test'), false)
+    assert.equal(raw.includes('"priceHistory"'), false, 'live snapshots only carry live data')
   })
 
   test('GET /events, /recap, /proof respond with cursor and deployment', async () => {

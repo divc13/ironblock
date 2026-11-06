@@ -159,16 +159,21 @@ JSON unless noted. Public data only (see privacy below).
   week-end stall state used by the dashboard's final price and stock heatmaps.
 - `priceHistory` is captured once at each simulated day close. Each entry is
   `{ day, endedAt, prices: { "merchantId:itemId": { bid, ask } } }`; asks and
-  bids are sanitized market quotes only. It is computed in the throwaway clone
-  and is not added to live SSE snapshots. The dashboard uses every good at
-  every close for its **Price paths** card, indexed to the first close.
+  bids are sanitized market quotes only. Merchant and item keys are sorted
+  deterministically, independent of snapshot key order. It is computed in the
+  throwaway clone and is not added to live SSE snapshots or `/snapshot`. The
+  dashboard uses every good at every close for its **Price paths** card,
+  indexed to the first close.
 - `annotations` are built server-side from real engine events (caravan
   arrivals, shocks, bankruptcies, reopens, distributions, recoveries, rent
   aggregates, day close) with causal-chain strings; the dashboard uses them for
   the ~7 s annotated playback (`playback.ts`) and the price-path markers. It
-  does not invent events. Scalar scenario shocks that are omitted by the event
-  sample are recovered from config inside the clone window, so a shock is
-  annotated exactly once.
+  does not invent events. Shock annotations come only from observed
+  `system.shock` engine events. The engine also records every fired shock in an
+  unsampled `shockEvents` list, so a shock dropped from the playback sample is
+  still annotated once; the list is server-side evidence and is not included in
+  the public response. There is no config-only fallback: a configured shock
+  that already fired before the clone window, or was skipped, is not annotated.
 - Deterministic: identical live state + identical `days` yield identical
   series/priceHistory/events/annotations (verified by tests).
 - Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 3 s** server

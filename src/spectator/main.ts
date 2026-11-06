@@ -417,6 +417,10 @@ function wireStaticEvents(): void {
     if (hiddenPathItems.has(itemId)) hiddenPathItems.delete(itemId)
     else hiddenPathItems.add(itemId)
     if (activePriceHistoryView) renderPriceHistoryCard(activePriceHistoryView, true)
+    const next = Array.from($('price-history-legend').querySelectorAll<HTMLButtonElement>('.price-key')).find(
+      candidate => candidate.dataset.pathItem === itemId,
+    )
+    next?.focus()
   })
 
   $('filter-group').addEventListener('change', event => {
@@ -1105,12 +1109,19 @@ function priceHistoryItems(days: PriceHistoryDay[], market: string): PriceItemVi
   })
 }
 
-function priceHistoryMarkers(payload: FastForwardClonePayload): PriceMarker[] {
+function priceHistoryMarkers(
+  payload: FastForwardClonePayload,
+  history: FastForwardClonePayload['priceHistory'],
+): PriceMarker[] {
   const kinds = new Set(['shock', 'bankruptcy', 'reopen'])
-  return (payload.annotations ?? [])
-    .filter(annotation => kinds.has(annotation.kind))
-    .map(annotation => ({
-      x: clamp(annotation.day - payload.startDay, 0, Math.max(0, payload.days - 1)),
+  const indexByDay = new Map(history.map((point, index) => [point.day, index]))
+  const markers: PriceMarker[] = []
+  for (const annotation of payload.annotations ?? []) {
+    if (!kinds.has(annotation.kind)) continue
+    const x = indexByDay.get(annotation.day)
+    if (x === undefined) continue
+    markers.push({
+      x,
       label: annotation.title,
       title: annotation.chain,
       tone:
@@ -1120,8 +1131,10 @@ function priceHistoryMarkers(payload: FastForwardClonePayload): PriceMarker[] {
             ? ('closure' as const)
             : ('reopen' as const),
       band: annotation.kind === 'shock',
-    }))
-    .slice(0, 12)
+    })
+    if (markers.length === 12) break
+  }
+  return markers
 }
 
 function buildWeekPriceHistoryView(payload: FastForwardClonePayload): PriceHistoryView {
@@ -1133,7 +1146,7 @@ function buildWeekPriceHistoryView(payload: FastForwardClonePayload): PriceHisto
     prices: point.prices,
   }))
   const items = priceHistoryItems(days, priceHistoryMarket)
-  const markers = priceHistoryMarkers(payload)
+  const markers = priceHistoryMarkers(payload, history)
   const labels = days.map(day => day.label)
   const marketName =
     priceHistoryMarket === 'town'
@@ -1957,10 +1970,14 @@ function renderPriceHistoryCard(view: PriceHistoryView, force = false): void {
       reveal: 1,
       markers: view.markers,
       ariaLabel: view.ariaLabel,
-      emptyText: view.emptyText,
+      emptyText:
+        visible.length === 0 && view.items.length > 0
+          ? 'All price paths are hidden — choose a good above.'
+          : view.emptyText,
       valueFormat: value => money(value),
       dayAriaLabel: index => {
         const label = view.labels[index] ?? 'Day'
+        if (visible.length === 0) return `${label}. All price paths are hidden.`
         const rows = view.items
           .filter(item => !hiddenPathItems.has(item.id))
           .map(item => {
@@ -2238,7 +2255,7 @@ function moneyTwin(view: MoneyFlowView, revealCount: number): string {
 function flowTwin(view: FlowView, revealCount: number): string {
   return twinTable(
     'External cash flows by day',
-    ['Day', 'Inflow', 'Outflow', 'Net', 'Orders', 'Caravan in', 'Caravan out', 'Sinks'],
+    ['Day', 'Inflow', 'Outflow', 'Net', 'Orders', 'Caravan in', 'Caravan out', 'Investments', 'Sinks'],
     view.points.map((point, index) => ({
       label: point.label,
       cells:
@@ -2250,9 +2267,19 @@ function flowTwin(view: FlowView, revealCount: number): string {
               money(point.orders),
               money(point.caravanIn),
               money(point.caravanOut),
+              money(point.investments),
               money(point.sinks),
             ]
-          : ['not yet', 'not yet', 'not yet', 'not yet', 'not yet', 'not yet', 'not yet'],
+          : [
+              'not yet',
+              'not yet',
+              'not yet',
+              'not yet',
+              'not yet',
+              'not yet',
+              'not yet',
+              'not yet',
+            ],
     })),
   )
 }

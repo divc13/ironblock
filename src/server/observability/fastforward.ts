@@ -4,6 +4,7 @@ import type {
   EconomyFastForwardResult,
   SequencedMarketEvent,
 } from '../../shared/economy'
+import { stableCompare } from '../../shared/stable-hash'
 import type { EconomyConfig } from '../../shared/types'
 import { money as formatMoney } from './format'
 import { buildRecap } from './recap'
@@ -110,7 +111,17 @@ export function runFastForwardClone(
 
   const aliases = buildPlayerAliases(liveBefore.players)
   const events = publicizeEvents(result.events, aliases, config)
-  const annotations = buildAnnotations(events, result.summaries, config, result.fromTime, result.toTime)
+  // `shockEvents` is the engine's unsampled evidence; `events` may omit some
+  // shocks because the playback sample is capped at reporting.eventSampleSize.
+  const shockEvents = publicizeEvents(result.shockEvents ?? [], aliases, config)
+  const annotations = buildAnnotations(
+    events,
+    result.summaries,
+    config,
+    result.fromTime,
+    result.toTime,
+    shockEvents,
+  )
   const finalPublicSnapshot = sanitizeSpectatorSnapshot(clone.spectatorSnapshot(), config)
 
   return {
@@ -128,11 +139,12 @@ export function runFastForwardClone(
     priceHistory: result.priceHistory.map(point => ({
       day: point.day,
       endedAt: point.endedAt,
+      // Keep the public key order deterministic even if a future engine source
+      // hands us an unordered quote record.
       prices: Object.fromEntries(
-        Object.entries(point.prices).map(([key, quote]) => [
-          key,
-          { bid: quote.bid, ask: quote.ask },
-        ]),
+        Object.entries(point.prices)
+          .sort(([left], [right]) => stableCompare(left, right))
+          .map(([key, quote]) => [key, { bid: quote.bid, ask: quote.ask }]),
       ),
     })),
     finalMerchants: finalPublicSnapshot.merchants,
@@ -173,12 +185,49 @@ export function buildAnnotations(
   config: EconomyConfig,
   fromTime: number,
   toTime: number,
+  observedShockEvents: SequencedMarketEvent[] = [],
 ): FastForwardAnnotation[] {
   const annotations: FastForwardAnnotation[] = []
   const rentByDay = new Map<number, { total: number; count: number; sequence: number; time: number }>()
 
   const merchantName = (id: string): string => config.merchants[id]?.displayName ?? id
   const itemName = (id: string | null): string => (id ? config.items[id]?.displayName ?? id : '')
+
+  const shockIdOf = (event: SequencedMarketEvent): string | null =>
+    event.reasons.find(reason => reason.code === 'shock')?.detail ?? null
+  const seenShockEventIds = new Set<string>()
+  const seenShockIds = new Set<string>()
+  /**
+   * Only an observed `system.shock` event can produce a shock annotation.
+   *
+   * The engine applies a configured shock at most once per run, so dedupe by
+   * event id first (sampled + unsampled copies of the same event) and by shock
+   * id second. No config-only fallback exists: a shock whose theoretical time
+   * falls inside the window but was already applied before the clone started,
+   * or was skipped, must not be invented here.
+   */
+  const pushShock = (event: SequencedMarketEvent): void => {
+    if (event.type !== 'system.shock') return
+    if (seenShockEventIds.has(event.id)) return
+    const shockId = shockIdOf(event)
+    if (shockId && seenShockIds.has(shockId)) return
+    seenShockEventIds.add(event.id)
+    if (shockId) seenShockIds.add(shockId)
+    const shock = shockId
+      ? config.scenario.shocks.find(candidate => candidate.id === shockId)
+      : undefined
+    const merchant = shock ? config.merchants[shock.merchantId] : undefined
+    const label = shock?.kind === 'cash-drain' ? 'cash shock' : 'supply shock'
+    annotations.push({
+      sequence: event.sequence,
+      time: event.time,
+      day: Math.floor(event.time / 86400) + 1,
+      kind: 'shock',
+      title: `${merchant?.displayName ?? 'A stall'} ${label}`,
+      chain: `${event.message} ${shockId ?? ''}`.trim(),
+      eventId: event.id,
+    })
+  }
 
   for (const event of events) {
     const base = {
@@ -204,18 +253,7 @@ export function buildAnnotations(
         break
       }
       case 'system.shock': {
-        const shockId = event.reasons.find(reason => reason.code === 'shock')?.detail ?? null
-        const shock = config.scenario.shocks.find(candidate => candidate.id === shockId)
-        const merchant = shock ? config.merchants[shock.merchantId] : undefined
-        const label = shock?.kind === 'cash-drain' ? 'cash shock' : 'supply shock'
-        annotations.push({
-          ...base,
-          kind: 'shock',
-          title: `${merchant?.displayName ?? 'A stall'} ${label}`,
-          chain:
-            `${event.message} ${event.reasons.find(reason => reason.code === 'shock')?.detail ?? ''}`.trim(),
-          eventId: event.id,
-        })
+        pushShock(event)
         break
       }
       case 'merchant.bankrupt': {
@@ -291,26 +329,11 @@ export function buildAnnotations(
     }
   }
 
-  const observedShocks = new Set(
-    events
-      .filter(event => event.type === 'system.shock')
-      .map(event => event.reasons.find(reason => reason.code === 'shock')?.detail)
-      .filter((value): value is string => Boolean(value)),
-  )
-  for (const shock of config.scenario.shocks) {
-    const time = (shock.day - 1) * 86400 + shock.atSecond
-    if (time < fromTime || time > toTime || observedShocks.has(shock.id)) continue
-    const merchant = config.merchants[shock.merchantId]
-    const label = shock.kind === 'cash-drain' ? 'cash shock' : 'supply shock'
-    annotations.push({
-      kind: 'shock',
-      sequence: 0,
-      time,
-      day: shock.day,
-      title: `${merchant?.displayName ?? 'A stall'} ${label}`,
-      chain: `${shock.message} -> cash and stock move without a player decision.`,
-      eventId: null,
-    })
+  // Add shocks that fired but were dropped by event sampling. Everything here
+  // is still an observed engine event, never a theoretical config timestamp.
+  for (const event of observedShockEvents) {
+    if (event.time < fromTime || event.time > toTime) continue
+    pushShock(event)
   }
 
   for (const [day, entry] of rentByDay) {
