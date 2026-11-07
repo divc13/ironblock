@@ -37,8 +37,25 @@ export class InMemoryAuthStore {
     const existing = this.players.get(input.identity.id);
     const player: StoredPlayer = {
       ...input.identity,
+      // A login without a payout address must not erase one the player already
+      // saved earlier in this process.
+      ...(input.identity.nearPublicKey
+        ? {}
+        : existing?.nearPublicKey
+          ? { nearPublicKey: existing.nearPublicKey }
+          : {}),
+      ...(input.identity.nearAccountId
+        ? {}
+        : existing?.nearAccountId
+          ? { nearAccountId: existing.nearAccountId }
+          : {}),
+      ...(input.identity.nearAccountSource
+        ? {}
+        : existing?.nearAccountSource
+          ? { nearAccountSource: existing.nearAccountSource }
+          : {}),
       auth0Subject: input.auth0Subject,
-      email: input.email,
+      email: input.email ?? existing?.email,
       createdAt: existing?.createdAt ?? now,
       lastLoginAt: now,
     };

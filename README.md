@@ -14,9 +14,9 @@ minute walkthrough.
 ## Status
 
 **Phase 2 integrated and shipped on `main`:** data-driven economy foundation,
-NEAR Auth testnet login, the deployed NEP-245 v2 items contract, the playable
-market loop, a live autonomous NPC town, the standalone spectator dashboard and
-the economy-backed settlement bridge. See
+public Auth0 Google/email login, the deployed NEP-245 v2 items contract, the
+playable market loop, a live autonomous NPC town, the standalone spectator
+dashboard and the economy-backed settlement bridge. See
 [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for the merge record, final testnet
 IDs and known blockers.
 
@@ -40,12 +40,19 @@ Implemented:
   trade and deliver orders; merchants restock and pay rent; caravans arrive on
   their own. The loop advances 1 in-game second per real second, serializes with
   player actions and fast-forward, and batches disk writes.
-- “Continue with Google” and “Continue with email” login overlay in the RPGJS client.
-- Auth0 popup login through the official NEAR Auth browser SDK.
-- MPC-derived ed25519 public key for the signed-in Auth0 subject.
-- Client-side check that the Auth0 ID token and access token describe the same subject.
+- “Continue with Google” and “Continue with email” login overlay in the RPGJS
+  client. Login is mandatory: there is no guest or mock-economy path.
+- Public `AUTH_MODE=auth0` login through the deployment owner’s Auth0 SPA tenant.
+- Optional player-supplied NEAR testnet payout address. It can be skipped at
+  login and set later before the first withdrawal; withdrawals are disabled
+  until it exists.
+- Local `AUTH_MODE=near` login through the official NEAR Auth browser SDK and
+  MPC-derived ed25519 identity.
+- Client-side check that the NEAR Auth ID token and access token describe the
+  same subject (near mode only).
 - Server-side Auth0 JWT verification (JWKS signature, issuer, audience, expiry).
-- Server-side MPC `derived_public_key` lookup and comparison against the client key.
+- Server-side MPC `derived_public_key` lookup and comparison against the client
+  key (near mode only).
 - Stable pseudonymous player id and server-issued HMAC game session.
 - RPGJS WebSocket authentication using the game session, never an Auth0 token.
 - Session restore, server-side logout/revocation, and TTL expiry at socket connect.
@@ -83,7 +90,7 @@ Contracts and deployment records live in
 ## Stack
 
 - RPGJS v5, TypeScript and Vite
-- NEAR Auth testnet (Auth0 + MPC) for social/email login
+- Auth0 Google/email login for the public build; optional local NEAR Auth/MPC path
 - One NEP-245 contract on NEAR testnet for all item types
 - Server-authoritative economy with an observable event stream
 
@@ -99,17 +106,50 @@ cp .env.example .env
 npm run dev
 ```
 
-Open exactly <http://localhost:3000>. The first successful Auth0 login reloads
-the page once by design; wait for the town and the “Live market” chip. The
-market keeps moving while you watch: press **T** for the Townsfolk roster and
-watch the Market Wire for their gather/trade/order events as the named bots walk
-to the matching resource area, stall or Guild Orders board. The full walkthrough
-is in [`docs/DEMO.md`](docs/DEMO.md).
+Open exactly <http://localhost:3000>. The game starts only after login; there is
+no guest path. The first successful login does not reload the page: the game is
+started after the server-issued session exists. Wait for the town and the “Live
+market” chip. The market keeps moving while you watch: press **T** for the
+Townsfolk roster and watch the Market Wire for their gather/trade/order events as
+the named bots walk to the matching resource area, stall or Guild Orders board.
+The full walkthrough is in [`docs/DEMO.md`](docs/DEMO.md).
 
-The port is deliberate: the shared NEAR Auth testnet Auth0 application allows
-`http://localhost:3000` as a callback URL. `localhost` and port `3000` must match
-exactly. Do not use `127.0.0.1` or another port. Use the manual checklist in
-[`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md).
+### Public Auth0 mode
+
+The public deployment uses the deployment owner’s Auth0 SPA tenant. Set these
+server and browser values (all public except the session secret):
+
+```bash
+AUTH_MODE=auth0
+VITE_AUTH_MODE=auth0
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+AUTH0_CLIENT_ID=your-spa-client-id
+AUTH0_AUDIENCE=your-spa-client-id
+VITE_AUTH0_DOMAIN=your-tenant.us.auth0.com
+VITE_AUTH0_CLIENT_ID=your-spa-client-id
+VITE_AUTH0_AUDIENCE=your-spa-client-id
+```
+
+In the Auth0 application, add `https://ironblock.up.railway.app` and
+`http://localhost:3000` to **Allowed Callback URLs**, **Allowed Web Origins** and
+**Allowed Logout URLs**. Enable Google and the email/password or passwordless
+connection you want. No Auth0 client secret is used by this SPA and no Auth0
+token is stored in browser storage. The server verifies the raw OIDC ID token;
+its audience is the SPA client id, so no separate Auth0 API/resource server is
+required.
+
+The player can enter a NEAR testnet payout address after Google/email login, or
+skip it and set it from the withdrawal panel before the first withdrawal. The
+address is a payout destination only; Ironblock never asks for its private key.
+
+### Local NEAR Auth mode
+
+`AUTH_MODE=near` remains available for local NEAR Auth/MPC testing. The shared
+NEAR Auth testnet application allows `http://localhost:3000` as a callback URL.
+`localhost` and port `3000` must match exactly. Do not use `127.0.0.1` or another
+port. Use the manual checklist in
+[`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md). This mode is
+separate from the public Auth0 path and must not be used for public login.
 
 The default economy config runs the deterministic `demoScenario` story. To run the
 stable sandbox economy instead, use the exported switch:
@@ -158,13 +198,14 @@ IRONBLOCK_BASE_PATH=/quest/ npm start
 ```
 
 The client derives its login path from Vite's `BASE_URL`, so it posts to
-`/quest/api/auth/near` in that example.
+`/quest/api/auth/auth0` (or `/quest/api/auth/near` in local near mode) in that
+example.
 
 ## Tests
 
 ```bash
 npm run test:unit                 # economy foundation + observability + node-mount tests
-npm run test:auth                 # JWT, MPC identity, sessions, logout, socket, rate limits
+npm run test:auth                 # Auth0/near login, sessions, logout, socket, rate limits
 npm run test:settlement           # ledger, withdrawal store, service, settlement HTTP (mocked chain)
 npm run test:production           # standalone asset smoke test (RPG_TYPE=rpg)
 npm run test:production:auth      # built preview + production auth probe
@@ -177,11 +218,13 @@ npm run smoke:settlement          # REAL testnet transfer: 1 item -> fresh impli
 ## Settlement (withdrawals)
 
 The settlement bridge moves items from the server-side game ledger to the
-player's MPC-derived implicit account as real NEP-245 tokens on **NEAR
-testnet**. Contract `v2.ironblock-items.testnet`, treasury
-`v2.ironblock-treasury.testnet` (see
+player's saved NEAR testnet payout account as real NEP-245 tokens. Contract
+`v2.ironblock-items.testnet`, treasury `v2.ironblock-treasury.testnet` (see
 [`contracts/nep245/deployments/testnet.json`](contracts/nep245/deployments/testnet.json)).
-Testnet only; no deposits, no player-signed transfers, no burn in this phase.
+In public Auth0 mode the payout account is supplied by the player and may be
+empty until they set it; in local NEAR Auth mode it is the MPC-derived implicit
+account. Testnet only; no deposits, no player-signed transfers, no burn in this
+phase.
 
 ### Withdrawal flow
 
@@ -189,9 +232,10 @@ Testnet only; no deposits, no player-signed transfers, no burn in this phase.
    with `{ requestId, tokenId, amount }`. The server verifies the session
    (same store as `/api/auth`).
 2. Validation: tokenId must exist on the deployed contract, amount must be a
-   positive integer, and the receiver is pinned to the session's
-   `nearAccountId` — the MPC-derived implicit account. A client cannot request
-   a different receiver.
+   positive integer, and the receiver is pinned to the session's saved
+   `nearAccountId`. If no payout address is set, the server returns
+   `NEAR_ACCOUNT_REQUIRED` and the player must set one first. A client cannot
+   request a different receiver.
 3. The ledger (in-memory adapter; the economy engine binds here) atomically
    **holds** the amount so duplicate submits cannot overdraw.
 4. An idempotent withdrawal record is keyed by `(playerId, requestId)`. A
@@ -251,55 +295,67 @@ prompt is involved.
 
 ## Authentication flow
 
-1. The RPGJS client boots with `deferConnection: true`, then shows the login overlay.
-2. The player signs in through the Auth0 popup (Google or email). The popup
-   requests the login API audience (`https://api.testnet.fast-auth.com`), not
-   the NEAR Auth signing audience: the signing audience is only valid on
-   requests that carry a transaction payload.
-3. The client compares the ID-token `sub` with the access-token `sub` and fails
-   clearly if Auth0 returns inconsistent identities. The MPC path uses the
-   ID-token subject; the server uses the independently verified access-token
-   subject.
-4. The NEAR Auth browser SDK derives the player's ed25519 public key through the
-   testnet MPC signer. No private key reaches the browser or this app.
-5. The browser sends the Auth0 **access token** and the MPC public key to
-   `POST /api/auth/near` (or `<base>/api/auth/near`).
-6. The server verifies the Auth0 token with Auth0's JWKS (RS256, issuer, login
-   API audience, expiry, subject), recomputes
-   `jwt#https://login.testnet.fast-auth.com/#<sub>`, reads
-   `derived_public_key` from the MPC contract, and compares it with the client key.
-7. The server maps the Auth0 `sub` to a stable pseudonymous player id, records the
-   player in the in-memory store, and issues a short-lived HMAC-signed game session.
-8. The browser stores only the game session in `sessionStorage` and connects to
-   the RPGJS WebSocket with it. The server verifies the game session and checks
-   the in-process session record before accepting the socket.
-9. `POST /api/auth/logout` revokes the session. Both `/api/auth/session` and later
+The RPGJS client starts with `deferConnection: true` and does not create a world
+until the server has issued a game session. There is no guest path.
+
+### Public Auth0 mode (`AUTH_MODE=auth0`)
+
+1. The player chooses **Continue with Google** or **Continue with email**.
+2. The Auth0 SPA SDK opens one popup with `openid profile email`. The ID token
+   stays in the SDK’s in-memory cache; it is never written to browser storage.
+3. The browser sends the raw **ID token** to `POST /api/auth/auth0` (or
+   `<base>/api/auth/auth0`). It may also send an optional NEAR payout address.
+4. The server verifies the ID token with the tenant JWKS (RS256, issuer,
+   audience = SPA client id, expiry, subject), maps the Auth0 `sub` to a stable
+   pseudonymous player id, records the optional payout address separately, and
+   issues a short-lived HMAC-signed game session.
+5. The player may skip the payout address. Withdrawals are blocked with
+   `NEAR_ACCOUNT_REQUIRED` until they set one, either in the login step or from
+   the withdrawal panel. Setting a new address issues a fresh session and
+   revokes the old one.
+6. The browser stores only the game session in `sessionStorage` and connects to
+   the RPGJS WebSocket with it. The server verifies the session and checks the
+   in-process session record before accepting the socket.
+7. `POST /api/auth/logout` revokes the session. Both `/api/auth/session` and later
    WebSocket connections reject the revoked token.
 
-The Auth0 access token exists in browser memory during login, but is never
-persisted by the client and is never written to server logs. `sessionStorage` is
-per-tab, so a second tab normally asks for login separately. If storage is
+### Local NEAR Auth mode (`AUTH_MODE=near`)
+
+1. The player signs in through the shared NEAR Auth testnet popup. This path is
+   for local development only.
+2. The client compares the ID-token `sub` with the access-token `sub` and fails
+   clearly if Auth0 returns inconsistent identities.
+3. The NEAR Auth browser SDK derives the player's ed25519 public key through the
+   testnet MPC signer. No private key reaches the browser or this app.
+4. The browser sends the Auth0 **access token** and the MPC public key to
+   `POST /api/auth/near`.
+5. The server verifies the access token with Auth0's JWKS, recomputes
+   `jwt#https://login.testnet.fast-auth.com/#<sub>`, reads
+   `derived_public_key` from the MPC contract, and compares it with the client
+   key. It then issues the same kind of game session.
+6. The session’s `nearAccountId` is the MPC-derived implicit account and cannot
+   be replaced through the Auth0 payout-address endpoint.
+
+In both modes the Auth0 token exists in browser memory only during login, is
+never persisted by Ironblock, and is never written to server logs. `sessionStorage`
+is per-tab, so a second tab normally asks for login separately. If storage is
 unavailable, an in-memory cache lets the current page connect, but a reload
 requires signing in again. Auth0 email may be absent; the display name then
 falls back to a short public subject hash.
 
-The login token is scoped to the Auth0 API audience, not the NEAR Auth signing
-audience. Auth0 rejects a signing-audience request that does not carry a
-`transaction` or `delegateAction` payload with `access_denied`; future
-transaction-signing flows must request `VITE_NEAR_AUTH_SIGNING_AUDIENCE`
-separately through the NEAR Auth SDK.
-
 ## Settlement (testnet)
 
 The integrated demo includes a testnet-only settlement bridge. It moves items
-from the server-side game ledger to the player's MPC-derived implicit account as
-real NEP-245 tokens.
+from the server-side game ledger to the player's saved payout account as real
+NEP-245 tokens.
 
 - Contract: `v2.ironblock-items.testnet`
 - Treasury: `v2.ironblock-treasury.testnet`
 - Withdrawal route: `POST /api/settlement/withdraw` with the bearer game session
   and `{ requestId, tokenId, amount }`. The receiver is pinned to the session's
-  `nearAccountId`; a client cannot request a different receiver.
+  saved `nearAccountId`; a client cannot request a different receiver.
+- In public Auth0 mode the payout address is player-supplied and optional until
+  set. In local near mode it is the MPC-derived implicit account.
 - The server signs `mt_transfer` from the treasury with exactly 1 yoctoNEAR and
   waits for `FINAL`. The treasury key never reaches the browser.
 - Recorded proof: [tx `5Xg9zyWN4P4eNpmfMtZtSAgzx5gi3VST4AVtrADjroRs`](https://explorer.testnet.near.org/transactions/5Xg9zyWN4P4eNpmfMtZtSAgzx5gi3VST4AVtrADjroRs)
@@ -314,13 +370,19 @@ backed by treasury inventory. See the proof and warnings in
 ## Environment
 
 Copy `.env.example` to `.env`. Never commit `.env` or any private key. Vite fails
-the build if public client values disagree with server values for the domain,
-audience, FastAuth contract or MPC contract.
+the build if the public client mode/values disagree with the server: `AUTH_MODE`
+must match `VITE_AUTH_MODE`, and the selected mode’s domain, client id and
+audience must match.
 
 Public browser values (safe to ship):
 
-| Variable | Testnet default / note |
+| Variable | Default / note |
 | --- | --- |
+| `VITE_AUTH_MODE` | `auth0` for public, `near` for local NEAR Auth/MPC |
+| `VITE_AUTH0_DOMAIN` | your Auth0 tenant hostname (public mode) |
+| `VITE_AUTH0_CLIENT_ID` | your Auth0 SPA client id (public mode) |
+| `VITE_AUTH0_AUDIENCE` | optional; defaults to the SPA client id |
+| `VITE_AUTH0_GOOGLE_CONNECTION` | `google-oauth2` |
 | `VITE_NEAR_NETWORK` | `testnet` |
 | `VITE_NEAR_RPC_URL` | `https://rpc.testnet.near.org` |
 | `VITE_NEP245_CONTRACT_ID` | `v2.ironblock-items.testnet` (final v2 deployment) |
@@ -334,8 +396,14 @@ Public browser values (safe to ship):
 
 Server-only values:
 
-| Variable | Testnet default / note |
+| Variable | Default / note |
 | --- | --- |
+| `AUTH_MODE` | `auth0` for public, `near` for local NEAR Auth/MPC |
+| `AUTH0_DOMAIN` | your Auth0 tenant hostname (public mode) |
+| `AUTH0_CLIENT_ID` | your Auth0 SPA client id (public mode) |
+| `AUTH0_AUDIENCE` | optional; defaults to the SPA client id |
+| `AUTH0_ISSUER` | optional; must equal `https://${AUTH0_DOMAIN}/` |
+| `AUTH0_JWKS_URL` | optional; HTTPS URL on the Auth0 domain |
 | `NEAR_AUTH_DOMAIN` | `login.testnet.fast-auth.com`; hostname only |
 | `NEAR_AUTH_ISSUER` | must equal `https://${NEAR_AUTH_DOMAIN}/` |
 | `NEAR_AUTH_AUDIENCE` | must match the client login API audience |
@@ -393,10 +461,13 @@ through a `VITE_*` variable and never commit the key or `.env`.
 
 ## Security notes
 
-- The Auth0 access token is verified server-side; the raw subject is stored only
+- The Auth0 token is verified server-side: the ID token in public `auth0` mode,
+  the login access token in local `near` mode. The raw subject is stored only
   server-side and clients receive a short subject hash.
-- The browser never receives a private key. MPC derives the public key; the
-  server independently verifies it for the verified Auth0 subject.
+- In public `auth0` mode the browser never receives or stores a NEAR private key.
+  The player-supplied payout address is only a withdrawal destination. In local
+  `near` mode MPC derives the public key; the server independently verifies it
+  for the verified Auth0 subject.
 - The game session is a separate HMAC token with server-controlled TTL. It is a
   bearer token in the WebSocket query string; use TLS and keep the TTL short.
   There is no cookie-based session and no subprotocol transport yet.
@@ -406,15 +477,16 @@ through a `VITE_*` variable and never commit the key or `.env`.
   restart only until its `exp` time. Logout or revocation in a new process marks
   that process as authoritative and rejects older unrecorded sessions.
 - The production host sends a baseline CSP and security headers. The Auth0
-  popup/iframe allowlist has been kept to the configured testnet tenant and RPC;
-  re-test it when changing Auth0 domains.
+  popup/iframe allowlist uses the configured Auth0 domain and RPC; re-test it
+  when changing Auth0 domains.
 - No wallet extension, seed phrase, wallet popup or gas prompt is used.
 
 ## Manual test
 
 See [`docs/near-auth-manual-test.md`](docs/near-auth-manual-test.md) for the
-checklist, the recorded result of the real testnet browser attempt, and known
-limitations.
+local NEAR Auth checklist and recorded testnet result. Public Auth0 login is
+covered by [`docs/HOSTING.md`](docs/HOSTING.md); it needs one human Google/email
+popup and a payout-address/withdrawal check.
 
 ## Planned structure
 

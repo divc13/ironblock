@@ -7,10 +7,12 @@ import {
 } from "./rate-limit";
 import { verifyGameSessionToken } from "./session";
 import {
+  authenticateAuth0Login,
   authenticateNearLogin,
   defaultAuthStore,
   describeGameSession,
   revokeGameSession,
+  updatePayoutAddress,
   type AuthenticateNearLoginDeps,
 } from "./service";
 import { InMemoryAuthStore } from "./store";
@@ -29,12 +31,14 @@ export interface NearAuthHttpOptions {
 const MAX_BODY_BYTES = 16 * 1024;
 
 /**
- * Auth API for the login spike:
+ * Auth API:
  *
- *   GET  /api/auth/health  configuration health check
- *   POST /api/auth/near    verify Auth0 JWT + MPC key, issue session
- *   GET  /api/auth/session validate a stored session for page reloads
- *   POST /api/auth/logout  revoke the supplied game session
+ *   GET  /api/auth/health        configuration health check
+ *   POST /api/auth/auth0         verify an Auth0 ID token, issue a session
+ *   POST /api/auth/near          verify Auth0 JWT + MPC key (local near mode)
+ *   POST /api/auth/near-account  set the Auth0 player's payout account
+ *   GET  /api/auth/session       validate a stored session for page reloads
+ *   POST /api/auth/logout        revoke the supplied game session
  *
  * Mounted by `nearAuthApiPlugin()` in Vite dev/preview and by the production
  * Node host. The same store is used by RPGJS WebSocket authentication.
@@ -95,9 +99,31 @@ async function handleRequest(
     if (route === "/health" && req.method === "GET") {
       sendJson(res, 200, {
         status: "ok",
-        service: "near-auth",
+        service: "ironblock-auth",
+        mode: config.mode,
         network: "testnet",
       });
+      return;
+    }
+
+    if (route === "/auth0" && req.method === "POST") {
+      const run = async () => {
+        requireJson(req);
+        const body = await readJsonBody(req);
+        return authenticateAuth0Login(
+          {
+            idToken: readString(body, "idToken"),
+            nearAccountId: readOptionalString(body, "nearAccountId"),
+          },
+          config,
+          { jwks: authDeps?.jwks, store },
+        );
+      };
+
+      const result = limiter
+        ? await limiter.withIp(clientAddress(req), run)
+        : await run();
+      sendJson(res, 200, result);
       return;
     }
 
@@ -121,6 +147,28 @@ async function handleRequest(
         );
       };
 
+      const result = limiter
+        ? await limiter.withIp(clientAddress(req), run)
+        : await run();
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (route === "/near-account" && req.method === "POST") {
+      const token = readBearerToken(req);
+      if (!token) {
+        throw new AuthError("SESSION_INVALID", 401, "Missing game session");
+      }
+      const run = async () => {
+        requireJson(req);
+        const body = await readJsonBody(req);
+        return updatePayoutAddress(
+          token,
+          readString(body, "nearAccountId"),
+          config,
+          store,
+        );
+      };
       const result = limiter
         ? await limiter.withIp(clientAddress(req), run)
         : await run();
@@ -177,7 +225,7 @@ function loadConfiguredAuth(): ServerAuthConfig {
     throw new AuthError(
       "CONFIGURATION",
       500,
-      "NEAR Auth is not configured on this server",
+      "Authentication is not configured on this server",
     );
   }
 }
@@ -188,7 +236,14 @@ function isAuthPath(pathname: string): boolean {
 
 function normalizeRoute(
   pathname: string,
-): "/health" | "/near" | "/session" | "/logout" | null {
+):
+  | "/health"
+  | "/auth0"
+  | "/near"
+  | "/near-account"
+  | "/session"
+  | "/logout"
+  | null {
   const marker = "/api/auth";
   const markerIndex = pathname.indexOf(marker);
   const routePath =
@@ -197,7 +252,9 @@ function normalizeRoute(
       : pathname;
 
   if (routePath === "/health") return "/health";
+  if (routePath === "/auth0") return "/auth0";
   if (routePath === "/near") return "/near";
+  if (routePath === "/near-account") return "/near-account";
   if (routePath === "/session") return "/session";
   if (routePath === "/logout") return "/logout";
   return null;
@@ -237,6 +294,18 @@ function readString(body: unknown, key: string): string {
     throw new AuthError("INVALID_REQUEST", 400, `Missing ${key}`);
   }
   return (body as Record<string, string>)[key];
+}
+
+function readOptionalString(body: unknown, key: string): string | undefined {
+  if (typeof body !== "object" || body === null || !(key in body)) {
+    return undefined;
+  }
+  const value = (body as Record<string, unknown>)[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new AuthError("INVALID_REQUEST", 400, `${key} must be a string`);
+  }
+  return value;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {

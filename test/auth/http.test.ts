@@ -168,7 +168,8 @@ describe("NEAR Auth HTTP routes", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       status: "ok",
-      service: "near-auth",
+      service: "ironblock-auth",
+      mode: "near",
       network: "testnet",
     });
   });

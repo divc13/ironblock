@@ -255,7 +255,7 @@ async function requireSession(
       "UNAUTHENTICATED",
       401,
       "Missing bearer game session",
-      "Sign in with NEAR Auth first.",
+      "Sign in first.",
     );
   }
   try {
@@ -376,9 +376,22 @@ function optionalReceiver(
   session: GameSessionClaims,
 ): string | undefined {
   const receiver = body.receiver;
+  if (!session.nearAccountId) {
+    if (receiver === undefined || receiver === null) return undefined;
+    throw new SettlementError(
+      "NEAR_ACCOUNT_REQUIRED",
+      400,
+      "No NEAR payout account is set for this session",
+      "Set your NEAR payout address before withdrawing items.",
+    );
+  }
   if (receiver === undefined || receiver === null) return undefined;
   if (typeof receiver !== "string" || receiver !== session.nearAccountId) {
-    throw new SettlementError("RECEIVER_MISMATCH", 400, "receiver must be the session's own implicit account");
+    throw new SettlementError(
+      "RECEIVER_MISMATCH",
+      400,
+      "receiver must be the session's saved payout account",
+    );
   }
   return receiver;
 }

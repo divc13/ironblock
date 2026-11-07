@@ -44,6 +44,7 @@
   },
   "private": true,
   "dependencies": {
+    "@auth0/auth0-spa-js": "^2.30.0",
     "@canvasengine/presets": "2.5.0",
     "@fast-auth-near/browser-sdk": "^1.4.2",
     "@fast-auth-near/javascript-provider": "^1.4.1",

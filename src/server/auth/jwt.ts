@@ -7,12 +7,13 @@ import type { ServerAuthConfig } from "./config";
 import { AuthError } from "./errors";
 
 /**
- * Auth0 access-token claims that this spike relies on. Auth0 may include many
+ * Auth0 ID-token claims that this server relies on. Auth0 may include many
  * more claims; they are deliberately not forwarded to the game client.
  */
 export interface Auth0Claims {
   sub: string;
   email?: string;
+  name?: string;
   exp: number;
   iat?: number;
   iss: string;
@@ -35,10 +36,11 @@ export function getRemoteJwks(jwksUri: string): JWTVerifyGetKey {
 }
 
 /**
- * Verify an Auth0 JWT before trusting any identity information.
+ * Verify an Auth0 ID token before trusting any identity information.
  *
  * Signature, issuer, audience, expiry and subject are all checked. Only RS256
- * is accepted, matching the Auth0 guard used by NEAR Auth.
+ * is accepted. In `auth0` mode the audience is the SPA client id; in `near`
+ * mode it is the shared login API audience.
  */
 export async function verifyAuth0Token(
   token: string,
@@ -75,6 +77,7 @@ export async function verifyAuth0Token(
   return {
     sub,
     email: typeof payload.email === "string" ? payload.email : undefined,
+    name: typeof payload.name === "string" ? payload.name : undefined,
     exp: Number(payload.exp),
     iat: typeof payload.iat === "number" ? payload.iat : undefined,
     iss: String(payload.iss),
@@ -100,14 +103,14 @@ function translateJoseError(error: unknown): AuthError {
       return new AuthError(
         "INVALID_AUDIENCE",
         401,
-        "Auth0 token audience is not the configured login API audience",
+        "Auth0 token audience is not the configured audience",
       );
     }
     if (claim === "iss") {
       return new AuthError(
         "INVALID_ISSUER",
         401,
-        "Auth0 token issuer is not the configured testnet tenant",
+        "Auth0 token issuer is not the configured tenant",
       );
     }
   }

@@ -1,6 +1,6 @@
 import { characters } from '../config/characters'
 import { economy } from '../config/economy'
-import { readNearAuthSession } from '../client/auth/near-auth'
+import { readAuthSession, saveAuthSession } from '../client/auth/session'
 import { FAST_FORWARD_PLAYBACK_MS } from '../shared/economy/fast-forward'
 import {
   mountWithdrawPanel,
@@ -909,9 +909,10 @@ export function mountIronblockUI(options: MountOptions): IronblockUI {
       container: withdrawBody,
       // Same base as the game, so subpath builds hit the right API.
       apiBase: import.meta.env.BASE_URL,
-      getSessionToken: () => readNearAuthSession()?.sessionToken,
+      getSessionToken: () => readAuthSession()?.sessionToken,
+      onSessionUpdated: session => saveAuthSession(session),
       onSessionNeeded: () =>
-        ui.toast('Sign in with NEAR Auth to withdraw items.', 'bad'),
+        ui.toast('Sign in to withdraw items.', 'bad'),
     })
     // Pull the current on-chain/ledger state whenever the action is opened.
     void withdrawPanel.refresh()

@@ -22,7 +22,7 @@ try {
   server = await startProductionServer();
   console.log(`[ironblock] production server listening at ${server.url}`);
   console.log(
-    "[ironblock] health: /health and /api/auth/health; NEAR Auth callback must use this origin on port 3000.",
+    "[ironblock] health: /health and /api/auth/health; public Auth0 mode uses the configured deployment origin.",
   );
 } catch (error) {
   console.error(

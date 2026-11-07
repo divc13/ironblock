@@ -1,4 +1,9 @@
 import type {
+  AuthSessionInfo,
+  AuthSessionResponse,
+} from "../../shared/auth/types";
+import { isValidNearAccountId } from "../../shared/auth/near-account";
+import type {
   ItemInfo,
   OnchainAccountView,
   WithdrawRequest,
@@ -30,6 +35,8 @@ export interface WithdrawPanelOptions {
   getSessionToken?: () => string | undefined;
   /** Settlement API prefix, default `/api/settlement` under the base. */
   apiBase?: string;
+  /** Persist a refreshed session after the payout address changes. */
+  onSessionUpdated?: (session: AuthSessionResponse) => void;
   /** Called when the player presses the reauth prompt. */
   onSessionNeeded?: () => void;
 }
@@ -50,7 +57,12 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
       .ironblock-withdraw-panel fieldset { border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; }
       .ironblock-withdraw-panel .wb-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
       .ironblock-withdraw-panel .wb-token { flex: 1; }
+      .ironblock-withdraw-panel .wb-account-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .ironblock-withdraw-panel .wb-account { word-break: break-all; opacity: .8; }
+      .ironblock-withdraw-panel .wb-address { margin: 10px 0; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+      .ironblock-withdraw-panel .wb-address label { display: block; margin-bottom: 6px; font-weight: 600; }
+      .ironblock-withdraw-panel .wb-address input { flex: 1; min-width: 180px; padding: 7px 9px; }
+      .ironblock-withdraw-panel .wb-help { margin-top: 6px; font-size: 12px; opacity: .75; }
       .ironblock-withdraw-panel .wb-warn { color: #b45309; font-weight: 600; }
       .ironblock-withdraw-panel .wb-tx a { font-family: ui-monospace, monospace; }
       .ironblock-withdraw-panel button { cursor: pointer; }
@@ -58,8 +70,19 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
     </style>
     <fieldset>
       <legend>Withdraw items (NEAR testnet)</legend>
-      <div class="wb-warn">Testnet only: withdrawing sends a real NEP-245 test-testnet token from the game treasury to your account.</div>
-      <div class="wb-account" data-role="account">Loading session…</div>
+      <div class="wb-warn">Testnet only: withdrawing sends a real NEP-245 test-testnet token from the game treasury to your payout account.</div>
+      <div class="wb-account-row">
+        <div class="wb-account" data-role="account">Loading session…</div>
+        <button type="button" data-role="change-address" hidden>Change</button>
+      </div>
+      <form class="wb-address" data-role="address-form" hidden>
+        <label for="wb-near-account">NEAR payout address</label>
+        <div class="wb-row">
+          <input id="wb-near-account" data-role="address" type="text" autocomplete="off" spellcheck="false" placeholder="you.testnet" maxlength="64"/>
+          <button type="submit" data-role="save-address">Save address</button>
+        </div>
+        <div class="wb-help">Use a NEAR testnet account you control. Withdrawals stay disabled until this is set.</div>
+      </form>
       <div class="wb-copy">Your game items live in the server ledger until you withdraw them on testnet.</div>
       <div class="wb-row">
         <select class="wb-token" data-role="token" title="Item"></select>
@@ -77,6 +100,10 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
   const amountInput = el("amount") as unknown as HTMLInputElement;
   const withdrawButton = el("withdraw") as HTMLButtonElement;
   const accountEl = el("account");
+  const changeAddressButton = el("change-address") as HTMLButtonElement;
+  const addressForm = el("address-form") as HTMLFormElement;
+  const addressInput = el("address") as HTMLInputElement;
+  const saveAddressButton = el("save-address") as HTMLButtonElement;
   const balancesEl = el("balances");
   const statusEl = el("status");
   const txEl = el("tx");
@@ -93,8 +120,72 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
   let accountId = "";
 
   function setBusy(busy: boolean, label?: string): void {
-    withdrawButton.disabled = busy;
+    withdrawButton.disabled = busy || !accountId;
+    saveAddressButton.disabled = busy;
     if (label) statusEl.textContent = label;
+  }
+
+  function showAddressForm(editing: boolean): void {
+    addressForm.hidden = false;
+    addressInput.value = editing ? accountId : "";
+    changeAddressButton.hidden = true;
+    addressInput.focus();
+  }
+
+  function renderAccount(): void {
+    if (!accountId) {
+      accountEl.textContent = "No payout address set.";
+      changeAddressButton.hidden = true;
+      withdrawButton.disabled = true;
+      showAddressForm(false);
+      return;
+    }
+    accountEl.textContent = `Payout account: ${accountId}`;
+    changeAddressButton.hidden = false;
+    addressForm.hidden = true;
+    withdrawButton.disabled = false;
+  }
+
+  async function saveAddress(): Promise<void> {
+    if (!sessionToken) {
+      statusEl.textContent = "Sign in first.";
+      options.onSessionNeeded?.();
+      return;
+    }
+    const address = addressInput.value.trim();
+    if (!isValidNearAccountId(address)) {
+      statusEl.textContent = "Enter a valid NEAR testnet account id, such as you.testnet.";
+      return;
+    }
+    setBusy(true, "Saving payout address…");
+    try {
+      const response = await fetchApi(
+        `${apiBase}/api/auth/near-account`,
+        { nearAccountId: address },
+        controller.signal,
+        sessionToken,
+      );
+      const body = (await response.json()) as
+        | AuthSessionResponse
+        | { error?: { message?: string } };
+      if (!response.ok || !("sessionToken" in body)) {
+        statusEl.textContent =
+          "error" in body && body.error?.message
+            ? body.error.message
+            : "The payout address could not be saved.";
+        return;
+      }
+      sessionToken = body.sessionToken;
+      options.onSessionUpdated?.(body);
+      accountId = body.player.nearAccountId ?? "";
+      renderAccount();
+      statusEl.textContent = "Payout address saved.";
+      await loadOnchain();
+    } catch {
+      statusEl.textContent = "Network error while saving the payout address.";
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function loadOnchain(): Promise<void> {
@@ -127,7 +218,7 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
 
   async function withdraw(): Promise<void> {
     if (!sessionToken) {
-      statusEl.textContent = "Sign in with NEAR Auth first.";
+      statusEl.textContent = "Sign in first.";
       options.onSessionNeeded?.();
       return;
     }
@@ -156,6 +247,11 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
   }
 
   withdrawButton.addEventListener("click", () => void withdraw());
+  changeAddressButton.addEventListener("click", () => showAddressForm(true));
+  addressForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveAddress();
+  });
   const poll = setInterval(() => {
     if (latest && (latest.status === "pending" || latest.status === "submitted")) {
       void refresh(latest.id);
@@ -214,16 +310,22 @@ export function mountWithdrawPanel(options: WithdrawPanelOptions): WithdrawPanel
         sessionToken,
       );
       if (response.ok) {
-        const info = (await response.json()) as { player: { nearAccountId: string } };
-        accountId = info.player.nearAccountId;
-        accountEl.textContent = accountId;
-        await loadOnchain();
+        const info = (await response.json()) as AuthSessionInfo;
+        accountId = info.player.nearAccountId ?? "";
+        renderAccount();
+        if (accountId) {
+          statusEl.textContent = "";
+          await loadOnchain();
+        } else {
+          statusEl.textContent =
+            "Set a NEAR payout address to enable withdrawals.";
+        }
         return;
       }
     } catch {
       // fallthrough to prompt
     }
-    statusEl.textContent = "Sign in with NEAR Auth first.";
+    statusEl.textContent = "Sign in first.";
     options.onSessionNeeded?.();
   }
 

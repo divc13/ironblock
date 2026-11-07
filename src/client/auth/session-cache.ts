@@ -1,4 +1,4 @@
-import type { NearAuthSessionResponse } from "../../shared/auth/types";
+import type { AuthSessionResponse } from "../../shared/auth/types";
 
 /**
  * Per-tab session cache with an in-memory fallback.
@@ -7,20 +7,23 @@ import type { NearAuthSessionResponse } from "../../shared/auth/types";
  * and storage policies can make it throw; in that case the current page can
  * still connect to the game, but a reload requires signing in again.
  */
-export interface NearAuthSessionCache {
-  save(session: NearAuthSessionResponse): void;
-  read(): NearAuthSessionResponse | undefined;
+export interface AuthSessionCache {
+  save(session: AuthSessionResponse): void;
+  read(): AuthSessionResponse | undefined;
   clear(): void;
 }
 
-export function createNearAuthSessionCache(
+/** Backwards-compatible alias for existing NEAR Auth imports. */
+export type NearAuthSessionCache = AuthSessionCache;
+
+export function createAuthSessionCache(
   storageKey: string,
-): NearAuthSessionCache {
-  let memorySession: NearAuthSessionResponse | undefined;
+): AuthSessionCache {
+  let memorySession: AuthSessionResponse | undefined;
 
   return {
     save(session) {
-      if (!isNearAuthSessionResponse(session)) return;
+      if (!isAuthSessionResponse(session)) return;
       memorySession = session;
       try {
         window.sessionStorage.setItem(storageKey, JSON.stringify(session));
@@ -60,25 +63,62 @@ export function createNearAuthSessionCache(
   };
 }
 
-export function isNearAuthSessionResponse(
+/** Backwards-compatible alias for existing NEAR Auth imports. */
+export const createNearAuthSessionCache = createAuthSessionCache;
+
+export function isAuthSessionResponse(
   value: unknown,
-): value is NearAuthSessionResponse {
+): value is AuthSessionResponse {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<NearAuthSessionResponse>;
-  return (
-    typeof candidate.sessionToken === "string" &&
-    candidate.sessionToken.length > 40 &&
-    typeof candidate.expiresAt === "string" &&
-    Number.isFinite(Date.parse(candidate.expiresAt)) &&
-    typeof candidate.player?.id === "string" &&
-    typeof candidate.player?.nearPublicKey === "string" &&
-    typeof candidate.player?.nearAccountId === "string"
-  );
+  const candidate = value as Partial<AuthSessionResponse>;
+  const player = candidate.player as
+    | Partial<AuthSessionResponse["player"]>
+    | undefined;
+  if (
+    candidate.authMode !== "near" &&
+    candidate.authMode !== "auth0"
+  ) {
+    return false;
+  }
+  if (
+    typeof candidate.sessionToken !== "string" ||
+    candidate.sessionToken.length <= 40 ||
+    typeof candidate.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(candidate.expiresAt)) ||
+    typeof player?.id !== "string" ||
+    typeof player.displayName !== "string" ||
+    typeof player.auth0SubjectHash !== "string"
+  ) {
+    return false;
+  }
+  if (
+    player.nearPublicKey !== undefined &&
+    typeof player.nearPublicKey !== "string"
+  ) {
+    return false;
+  }
+  if (
+    player.nearAccountId !== undefined &&
+    typeof player.nearAccountId !== "string"
+  ) {
+    return false;
+  }
+  if (
+    player.nearAccountSource !== undefined &&
+    player.nearAccountSource !== "mpc" &&
+    player.nearAccountSource !== "player"
+  ) {
+    return false;
+  }
+  return true;
 }
 
-function isUsableSession(value: unknown): value is NearAuthSessionResponse {
+/** Backwards-compatible alias for existing NEAR Auth imports. */
+export const isNearAuthSessionResponse = isAuthSessionResponse;
+
+function isUsableSession(value: unknown): value is AuthSessionResponse {
   return (
-    isNearAuthSessionResponse(value) &&
+    isAuthSessionResponse(value) &&
     Date.parse(value.expiresAt) > Date.now()
   );
 }

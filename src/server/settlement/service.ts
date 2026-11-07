@@ -55,14 +55,23 @@ export class NearItemSettlement {
     const requestId = parseRequestId(input.requestId);
     const tokenId = parseTokenId(input.tokenId);
     const amount = parseItemAmount(input.amount);
-    const receiver = input.receiver ?? session.nearAccountId;
 
+    if (!session.nearAccountId) {
+      throw new SettlementError(
+        "NEAR_ACCOUNT_REQUIRED",
+        400,
+        "No NEAR payout account is set for this session",
+        "Set your NEAR payout address before withdrawing items.",
+      );
+    }
+
+    const receiver = input.receiver ?? session.nearAccountId;
     if (receiver !== session.nearAccountId) {
       throw new SettlementError(
         "RECEIVER_MISMATCH",
         400,
-        `Withdrawal receiver ${receiver} is not this session's implicit account`,
-        "Withdrawals can only be sent to your own NEAR account.",
+        `Withdrawal receiver ${receiver} is not this session's payout account`,
+        "Withdrawals can only be sent to your saved NEAR payout account.",
       );
     }
     if (!isValidNearAccountId(receiver)) {

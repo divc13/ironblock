@@ -69,6 +69,7 @@ function makeSession(overrides: Partial<GameSessionClaims> = {}): GameSessionCla
     sessionId: "sess-1",
     playerId: "player_1",
     displayName: "Tester",
+    authMode: "near",
     nearPublicKey: "ed25519:9RBws9u5jKencGEaxVuV4FXY85Ue22TwTozMxYDG8ryh",
     nearAccountId: RECEIVER,
     auth0SubjectHash: "hash",
@@ -224,6 +225,25 @@ describe("NearItemSettlement.withdraw", () => {
     expect(ledger.activeHolds("player_1")).toHaveLength(0);
     const records = await store.findByPlayer("player_1");
     expect(records[0].status).toBe("failed");
+  });
+
+  it("requires a payout address before withdrawing", async () => {
+    const chain = makeChain();
+    const { settlement, ledger } = makeService(chain, {
+      player_1: [{ tokenId: "bread", amount: 10 }],
+    });
+
+    await expect(
+      settlement.withdraw({
+        ...happyInput(),
+        session: makeSession({ nearAccountId: undefined }),
+      }),
+    ).rejects.toMatchObject({
+      code: "NEAR_ACCOUNT_REQUIRED",
+      status: 400,
+    });
+    expect(chain.transfers).toHaveLength(0);
+    expect(await ledger.available("player_1", "bread")).toBe("10");
   });
 
   it("rejects unauthorized receivers, unknown tokens and bad sessions", async () => {

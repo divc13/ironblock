@@ -5,19 +5,14 @@ import {
   type JavascriptProviderOptions,
 } from "@fast-auth-near/javascript-provider";
 import type { Auth0Client } from "@auth0/auth0-spa-js";
-import type {
-  NearAuthSessionInfo,
-  NearAuthSessionResponse,
-} from "../../shared/auth/types";
+import type { AuthSessionResponse } from "../../shared/auth/types";
 import {
   logAuth0LoginFailure,
   readableAuth0Error,
 } from "./auth0-errors";
 import { clientNearAuthConfig } from "./config";
-import {
-  createNearAuthSessionCache,
-  isNearAuthSessionResponse,
-} from "./session-cache";
+import { saveAuthSession } from "./session";
+import { isAuthSessionResponse } from "./session-cache";
 import { assertMatchingTokenSubjects } from "./token-subject";
 
 /**
@@ -130,7 +125,7 @@ async function getAuth(): Promise<{
  */
 export async function loginWithNearAuth(
   method: "google" | "email",
-): Promise<NearAuthSessionResponse> {
+): Promise<AuthSessionResponse> {
   const auth = await getAuth();
 
   let idTokenSubject: string;
@@ -179,7 +174,7 @@ export async function loginWithNearAuth(
   });
 
   const body = (await response.json().catch(() => undefined)) as
-    | NearAuthSessionResponse
+    | AuthSessionResponse
     | { error?: { message?: string } }
     | undefined;
 
@@ -191,87 +186,10 @@ export async function loginWithNearAuth(
     );
   }
 
-  if (!isNearAuthSessionResponse(body)) {
+  if (!isAuthSessionResponse(body) || body.authMode !== "near") {
     throw new NearAuthFlowError("The game server returned an invalid session");
   }
 
-  saveNearAuthSession(body);
+  saveAuthSession(body);
   return body;
-}
-
-/**
- * Restore a game session after reload. The Auth0 token is not persisted; only
- * the server-issued game session is stored in sessionStorage.
- */
-export async function restoreNearAuthSession(): Promise<NearAuthSessionResponse | null> {
-  const stored = readNearAuthSession();
-  if (!stored) return null;
-
-  try {
-    const response = await fetch(
-      `${clientNearAuthConfig.loginApiPath}/session`,
-      {
-        headers: { authorization: `Bearer ${stored.sessionToken}` },
-        credentials: "same-origin",
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    if (!response.ok) {
-      clearNearAuthSession();
-      return null;
-    }
-    const info = (await response.json()) as NearAuthSessionInfo;
-    if (!info?.player?.id || !info.expiresAt) {
-      clearNearAuthSession();
-      return null;
-    }
-    const restored: NearAuthSessionResponse = {
-      sessionToken: stored.sessionToken,
-      expiresAt: info.expiresAt,
-      player: info.player,
-    };
-    saveNearAuthSession(restored);
-    return restored;
-  } catch {
-    clearNearAuthSession();
-    return null;
-  }
-}
-
-const sessionCache = createNearAuthSessionCache(
-  clientNearAuthConfig.sessionStorageKey,
-);
-
-export function saveNearAuthSession(session: NearAuthSessionResponse): void {
-  sessionCache.save(session);
-}
-
-export function readNearAuthSession(): NearAuthSessionResponse | null {
-  return sessionCache.read() ?? null;
-}
-
-export function clearNearAuthSession(): void {
-  sessionCache.clear();
-}
-
-/**
- * Revoke the current game session on the server and clear the local cache.
- * The endpoint is available even though the spike does not yet render an
- * in-game account menu.
- */
-export async function logoutNearAuthSession(): Promise<void> {
-  const session = readNearAuthSession();
-  clearNearAuthSession();
-  if (!session) return;
-
-  try {
-    await fetch(`${clientNearAuthConfig.loginApiPath}/logout`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${session.sessionToken}` },
-      credentials: "same-origin",
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch {
-    // Local sign-out still succeeds if the server is unreachable.
-  }
 }

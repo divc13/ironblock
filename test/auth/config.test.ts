@@ -104,6 +104,39 @@ describe("loadServerAuthConfig", () => {
       ).toThrow(/NEAR_AUTH_SESSION_TTL_SECONDS/);
     }
   });
+
+  it("uses the SPA client id as the Auth0 ID-token audience", () => {
+    const config = loadServerAuthConfig({
+      AUTH_MODE: "auth0",
+      NEAR_AUTH_SESSION_SECRET: VALID_SECRET,
+      AUTH0_DOMAIN: "example.auth0.test",
+      AUTH0_CLIENT_ID: "spa-client-id",
+    });
+
+    expect(config.mode).toBe("auth0");
+    expect(config.domain).toBe("example.auth0.test");
+    expect(config.issuer).toBe("https://example.auth0.test/");
+    expect(config.clientId).toBe("spa-client-id");
+    expect(config.audience).toBe("spa-client-id");
+    expect(config.fastAuthContractId).toBe("");
+    expect(config.mpcContractId).toBe("");
+  });
+
+  it("requires the Auth0 SPA values in auth0 mode", () => {
+    expect(() =>
+      loadServerAuthConfig({
+        AUTH_MODE: "auth0",
+        NEAR_AUTH_SESSION_SECRET: VALID_SECRET,
+      }),
+    ).toThrow(/AUTH0_DOMAIN/);
+    expect(() =>
+      loadServerAuthConfig({
+        AUTH_MODE: "auth0",
+        NEAR_AUTH_SESSION_SECRET: VALID_SECRET,
+        AUTH0_DOMAIN: "example.auth0.test",
+      }),
+    ).toThrow(/AUTH0_CLIENT_ID/);
+  });
 });
 
 describe("validateClientServerAuthConsistency", () => {
@@ -145,5 +178,46 @@ describe("validateClientServerAuthConsistency", () => {
         VITE_NEAR_AUTH_NETWORK: "mainnet",
       }),
     ).toThrow(/VITE_NEAR_AUTH_NETWORK/);
+  });
+
+  it("accepts matching Auth0 client and server values", () => {
+    const auth0 = loadServerAuthConfig({
+      AUTH_MODE: "auth0",
+      NEAR_AUTH_SESSION_SECRET: VALID_SECRET,
+      AUTH0_DOMAIN: "example.auth0.test",
+      AUTH0_CLIENT_ID: "spa-client-id",
+    });
+
+    expect(() =>
+      validateClientServerAuthConsistency(auth0, {
+        VITE_AUTH_MODE: "auth0",
+        VITE_AUTH0_DOMAIN: auth0.domain,
+        VITE_AUTH0_CLIENT_ID: auth0.clientId,
+        VITE_AUTH0_AUDIENCE: auth0.audience,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects Auth0 mode and client id mismatches", () => {
+    const auth0 = loadServerAuthConfig({
+      AUTH_MODE: "auth0",
+      NEAR_AUTH_SESSION_SECRET: VALID_SECRET,
+      AUTH0_DOMAIN: "example.auth0.test",
+      AUTH0_CLIENT_ID: "spa-client-id",
+    });
+
+    expect(() =>
+      validateClientServerAuthConsistency(auth0, {
+        VITE_AUTH_MODE: "near",
+      }),
+    ).toThrow(/VITE_AUTH_MODE=near does not match AUTH_MODE=auth0/);
+
+    expect(() =>
+      validateClientServerAuthConsistency(auth0, {
+        VITE_AUTH_MODE: "auth0",
+        VITE_AUTH0_DOMAIN: auth0.domain,
+        VITE_AUTH0_CLIENT_ID: "other-client",
+      }),
+    ).toThrow(/VITE_AUTH0_CLIENT_ID/);
   });
 });

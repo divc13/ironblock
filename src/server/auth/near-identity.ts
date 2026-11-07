@@ -155,7 +155,7 @@ export async function verifyNearIdentityForSubject(
     playerId: playerIdForSubject(input.subject),
     nearPublicKey: expected.key,
     nearAccountId: expected.implicitAccountId,
-    displayName: displayName(input.email, subjectHash),
+    displayName: displayNameForEmail(input.email, subjectHash),
     derivedKeyPath: path,
   };
 }
@@ -197,7 +197,11 @@ function normalizeEd25519Key(
   }
 }
 
-function displayName(email: string | undefined, subjectHash: string): string {
+/** Safe display label from a verified email, with a stable hash fallback. */
+export function displayNameForEmail(
+  email: string | undefined,
+  subjectHash: string,
+): string {
   const localPart = email?.split("@")[0]?.replace(/[^\w.-]/g, "").slice(0, 24);
   return localPart || `Player ${subjectHash.slice(0, 4)}`;
 }

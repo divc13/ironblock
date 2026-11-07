@@ -85,8 +85,10 @@ npm run build
 npm start                 # production host on :3000 (needs NEAR_AUTH_SESSION_SECRET)
 ```
 
-Development stays on `npm run dev` at <http://localhost:3000> (port fixed to
-match the shared NEAR Auth testnet Auth0 callback).
+Development stays on `npm run dev` at <http://localhost:3000>. The public
+deployment uses `AUTH_MODE=auth0`; local NEAR Auth/MPC testing uses
+`AUTH_MODE=near`, whose shared testnet application allows the exact
+`http://localhost:3000` callback.
 
 ## Production probes
 
@@ -95,7 +97,8 @@ With the production host running (`npm start`), the expected results are:
 | Probe | Expected |
 | --- | --- |
 | `GET /health` | `200` `{"status":"ok","service":"ironblock"}` |
-| `GET /api/auth/health` | `200` `{"status":"ok","service":"near-auth","network":"testnet"}` |
+| `GET /api/auth/health` | `200` `{"status":"ok","service":"ironblock-auth","mode":"auth0","network":"testnet"}` (or `"mode":"near"` locally) |
+| `POST /api/auth/auth0` with an empty body | `400`, never `404` |
 | `POST /api/auth/near` with an empty body | `400`/`401`, never `404` |
 | `GET /api/auth/session` without a session | `401`, never `404` |
 | `GET /` | `200`, built game page |
@@ -103,16 +106,16 @@ With the production host running (`npm start`), the expected results are:
 `npm run test:production:auth` runs these probes automatically against both
 `vite preview` and the production host.
 
-## Known real-login blocker
+## Real-login verification
 
-The login flow cannot be end-to-end verified without a human: `POST
-/api/auth/near` requires a real Auth0 ID/access token obtained through the
-Google/email popup of the shared NEAR Auth testnet tenant, and the MPC key
-derivation runs against the testnet signer. Automated tests stop at the
-boundary (tokens rejected, routes mounted, sessions issued). A human must
-still perform the manual checklist in
-[`docs/near-auth-manual-test.md`](near-auth-manual-test.md) with a real
-Google/email account to confirm a full login.
+Automated tests verify JWKS signatures, issuer/audience checks, session issue
+and revocation, payout-address updates and route mounting with local keys. A
+human must still complete one real Google/email popup for the public Auth0
+tenant, and one real `AUTH_MODE=near` login for the local NEAR Auth/MPC path.
+The local NEAR Auth checklist remains in
+[`docs/near-auth-manual-test.md`](near-auth-manual-test.md). Public login is
+documented in [`docs/HOSTING.md`](HOSTING.md) and uses the deployment owner’s
+Auth0 tenant, not the shared NEAR Auth tenant.
 
 ## Phase 2 final status
 
@@ -159,9 +162,10 @@ Still honest limitations:
 
 - A real Google/email Auth0 login must be completed by a human; automated tests
   stop at the token/MPC boundary.
+- Public login requires the deployment Auth0 tenant to allow the public origin
+  in its callback URLs and web origins.
 - Auth sessions, revocation and rate limits are process-local; run one process.
-- The shared Auth0 testnet client currently allows the local
-  `http://localhost:3000` callback. A public origin needs a tenant callback
-  change.
 - Settlement is testnet-only, treasury-mediated, with no deposits or burns.
+- In public Auth0 mode the player-supplied payout address is a withdrawal
+  destination, not a verified NEAR identity.
 - `npm test` may still report npm audit warnings for transitive dependencies.

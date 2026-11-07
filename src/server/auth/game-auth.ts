@@ -1,4 +1,5 @@
 import type { RpgServerAuthSocket } from "@rpgjs/server";
+import type { NearAccountSource } from "../../shared/auth/types";
 import {
   loadServerAuthConfig,
   type ServerAuthConfig,
@@ -9,8 +10,11 @@ import { InMemoryAuthStore } from "./store";
 /** Ephemeral, server-only identity data passed to RPGJS player hooks. */
 export interface GameAuthData {
   sessionId: string;
-  nearPublicKey: string;
-  nearAccountId: string;
+  /** Present only in local NEAR Auth mode. */
+  nearPublicKey?: string;
+  /** Payout account; absent for an Auth0 player until they set one. */
+  nearAccountId?: string;
+  nearAccountSource?: NearAccountSource;
   auth0SubjectHash: string;
   displayName: string;
 }
@@ -49,8 +53,15 @@ export async function authenticateGameSocket(
       id: claims.playerId,
       data: {
         sessionId: claims.sessionId,
-        nearPublicKey: claims.nearPublicKey,
-        nearAccountId: claims.nearAccountId,
+        ...(claims.nearPublicKey
+          ? { nearPublicKey: claims.nearPublicKey }
+          : {}),
+        ...(claims.nearAccountId
+          ? { nearAccountId: claims.nearAccountId }
+          : {}),
+        ...(claims.nearAccountSource
+          ? { nearAccountSource: claims.nearAccountSource }
+          : {}),
         auth0SubjectHash: claims.auth0SubjectHash,
         displayName: claims.displayName,
       },

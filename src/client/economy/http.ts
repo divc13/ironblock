@@ -228,7 +228,7 @@ export class HttpEconomyClient implements EconomyClient {
       throw new EconomyApiError(
         401,
         'UNAUTHORIZED',
-        'Sign in with NEAR Auth to trade on the live market.',
+        'Sign in to trade on the live market.',
       )
     }
 

@@ -53,10 +53,15 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
   // Vite exposes only VITE_* values to the browser automatically. Copy the
-  // server-only NEAR Auth settings into process.env for the API middleware and
-  // the RPGJS engine auth hook (both run in this Node process).
+  // server-only auth settings into process.env for the API middleware and the
+  // RPGJS engine auth hook (both run in this Node process).
   for (const [key, value] of Object.entries(env)) {
-    if (key.startsWith('NEAR_AUTH_') && !process.env[key]) {
+    if (
+      (key.startsWith('NEAR_AUTH_') ||
+        key.startsWith('AUTH0_') ||
+        key === 'AUTH_MODE') &&
+      !process.env[key]
+    ) {
       process.env[key] = value;
     }
   }
@@ -87,9 +92,9 @@ export default defineConfig(({ mode }) => {
   validateClientServerAuthConsistency(serverAuthConfig, env);
 
   return {
-    // The shared NEAR Auth testnet Auth0 application allows
-    // http://localhost:3000 as a callback. Keep this port stable so popup login
-    // works without changing the shared tenant's allowed callback URLs.
+    // Local near mode uses the shared NEAR Auth testnet application, which
+    // allows http://localhost:3000 as a callback. Public Auth0 mode uses the
+    // deployment origin. Keep this local port stable for near-mode testing.
     server: {
       port: 3000,
       strictPort: true,

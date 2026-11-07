@@ -1,25 +1,39 @@
 import { randomBytes } from "node:crypto";
 import { NEAR_AUTH_TESTNET_DEFAULTS } from "../../shared/auth/defaults";
+import type { AuthMode } from "../../shared/auth/types";
 
 /**
- * Server-only NEAR Auth configuration.
+ * Server-only authentication configuration.
  *
- * SPIKE: testnet only. Never import this module from browser code.
+ * `near` mode keeps the original local NEAR Auth/MPC flow. `auth0` mode uses
+ * the deployment owner's own Auth0 SPA tenant and a player-supplied payout
+ * account, so it never needs the shared NEAR Auth tenant or MPC contracts.
+ *
+ * Never import this module from browser code.
  */
 export interface ServerAuthConfig {
+  /** Which login path this process accepts. */
+  mode: AuthMode;
   /** Auth0 tenant domain, without a scheme. */
   domain: string;
   /** Auth0 issuer, with the trailing slash Auth0 uses. */
   issuer: string;
-  /** Audience of the Auth0 API access token accepted for login. */
+  /** Auth0 SPA client id (empty in `near` mode). */
+  clientId: string;
+  /**
+   * Audience accepted on the Auth0 JWT.
+   *
+   * In `auth0` mode this is the SPA client id because the server verifies the
+   * OIDC ID token. In `near` mode it is the shared login API audience.
+   */
   audience: string;
   /** Auth0 JWKS endpoint. */
   jwksUri: string;
-  /** NEAR RPC used for the MPC `derived_public_key` view call. */
+  /** NEAR RPC used by the MPC lookup and the production CSP. */
   rpcUrl: string;
-  /** NEAR Auth entry-point contract. */
+  /** NEAR Auth entry-point contract (empty in `auth0` mode). */
   fastAuthContractId: string;
-  /** MPC signer contract that owns `derived_public_key`. */
+  /** MPC signer contract that owns `derived_public_key` (empty in `auth0`). */
   mpcContractId: string;
   /** HMAC secret for Ironblock game-session tokens. */
   sessionSecret: string;
@@ -40,10 +54,83 @@ export const SESSION_AUDIENCE = "ironblock-game";
 export function loadServerAuthConfig(
   env: Record<string, string | undefined> = process.env,
 ): ServerAuthConfig {
+  const mode = parseAuthMode(env);
+  const secret = env.NEAR_AUTH_SESSION_SECRET?.trim();
+
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      "NEAR_AUTH_SESSION_SECRET must be set to at least 32 characters",
+    );
+  }
+
+  const ttl = Number(env.NEAR_AUTH_SESSION_TTL_SECONDS ?? "3600");
+  if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86_400) {
+    throw new Error("NEAR_AUTH_SESSION_TTL_SECONDS must be between 60 and 86400");
+  }
+
+  if (mode === "auth0") {
+    const domain = normalizeDomain(
+      requireNonEmpty(env.AUTH0_DOMAIN ?? "", "AUTH0_DOMAIN"),
+      "AUTH0_DOMAIN",
+    );
+    const issuer = normalizeIssuer(
+      env.AUTH0_ISSUER,
+      domain,
+      "AUTH0_ISSUER",
+      "AUTH0_DOMAIN",
+    );
+    const clientId = requireNonEmpty(
+      env.AUTH0_CLIENT_ID ?? "",
+      "AUTH0_CLIENT_ID",
+    );
+    const audience = requireNonEmpty(
+      env.AUTH0_AUDIENCE ?? clientId,
+      "AUTH0_AUDIENCE",
+    );
+    const jwksUri = requireNonEmpty(
+      env.AUTH0_JWKS_URL ?? `https://${domain}/.well-known/jwks.json`,
+      "AUTH0_JWKS_URL",
+    );
+    const rpcUrl = requireNonEmpty(
+      env.NEAR_RPC_URL ??
+        env.NEAR_AUTH_RPC_URL ??
+        NEAR_AUTH_TESTNET_DEFAULTS.rpcUrl,
+      "NEAR_RPC_URL",
+    );
+
+    if (isMainnetDomain(domain)) {
+      throw new Error(
+        "This deployment is testnet-only; mainnet NEAR Auth is not configured",
+      );
+    }
+
+    validateJwksUri(jwksUri, domain, "AUTH0_JWKS_URL");
+
+    return {
+      mode,
+      domain,
+      issuer,
+      clientId,
+      audience,
+      jwksUri,
+      rpcUrl,
+      fastAuthContractId: "",
+      mpcContractId: "",
+      sessionSecret: secret,
+      sessionTtlSeconds: Math.floor(ttl),
+    };
+  }
+
   const domain = normalizeDomain(
     env.NEAR_AUTH_DOMAIN ?? NEAR_AUTH_TESTNET_DEFAULTS.domain,
+    "NEAR_AUTH_DOMAIN",
   );
-  const issuer = normalizeIssuer(env.NEAR_AUTH_ISSUER, domain);
+  const issuer = normalizeIssuer(
+    env.NEAR_AUTH_ISSUER,
+    domain,
+    "NEAR_AUTH_ISSUER",
+    "NEAR_AUTH_DOMAIN",
+  );
   const audience = requireNonEmpty(
     env.NEAR_AUTH_AUDIENCE ?? NEAR_AUTH_TESTNET_DEFAULTS.audience,
     "NEAR_AUTH_AUDIENCE",
@@ -66,13 +153,6 @@ export function loadServerAuthConfig(
     env.NEAR_AUTH_MPC_CONTRACT_ID ?? NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
     "NEAR_AUTH_MPC_CONTRACT_ID",
   );
-  const secret = env.NEAR_AUTH_SESSION_SECRET?.trim();
-
-  if (!secret || secret.length < 32) {
-    throw new Error(
-      "NEAR_AUTH_SESSION_SECRET must be set to at least 32 characters",
-    );
-  }
 
   if (isMainnetDomain(domain)) {
     throw new Error(
@@ -80,16 +160,13 @@ export function loadServerAuthConfig(
     );
   }
 
-  validateJwksUri(jwksUri, domain);
-
-  const ttl = Number(env.NEAR_AUTH_SESSION_TTL_SECONDS ?? "3600");
-  if (!Number.isFinite(ttl) || ttl < 60 || ttl > 86_400) {
-    throw new Error("NEAR_AUTH_SESSION_TTL_SECONDS must be between 60 and 86400");
-  }
+  validateJwksUri(jwksUri, domain, "NEAR_AUTH_JWKS_URL");
 
   return {
+    mode,
     domain,
     issuer,
+    clientId: "",
     audience,
     jwksUri,
     rpcUrl,
@@ -101,60 +178,94 @@ export function loadServerAuthConfig(
 }
 
 /**
- * Fail the build when the browser and server would use different Auth0/MPC
- * identities. A mismatch produces confusing "invalid audience" or key-mismatch
- * failures at login time, so catch it before bundling. The compared audience is
- * the login API audience; the NEAR Auth signing audience is client-only and is
- * requested solely for transaction signatures.
+ * Fail the build when the browser and server would use different identity
+ * providers. A mismatch produces confusing "invalid audience" failures at
+ * login time, so catch it before bundling.
  */
 export function validateClientServerAuthConsistency(
   server: ServerAuthConfig,
   env: Record<string, string | undefined>,
 ): void {
-  const client = {
-    network:
-      env.VITE_NEAR_AUTH_NETWORK ?? NEAR_AUTH_TESTNET_DEFAULTS.network,
-    domain: normalizeDomain(
-      env.VITE_NEAR_AUTH_DOMAIN ?? NEAR_AUTH_TESTNET_DEFAULTS.domain,
-    ),
-    audience:
-      env.VITE_NEAR_AUTH_AUDIENCE ?? NEAR_AUTH_TESTNET_DEFAULTS.audience,
-    fastAuthContractId:
-      env.VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID ??
-      NEAR_AUTH_TESTNET_DEFAULTS.fastAuthContractId,
-    mpcContractId:
-      env.VITE_NEAR_AUTH_MPC_CONTRACT_ID ??
-      NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
-  };
-
+  const clientMode = parseClientAuthMode(env);
   const issues: string[] = [];
-  if (client.network !== "testnet") {
-    issues.push("VITE_NEAR_AUTH_NETWORK must be testnet");
-  }
-  if (client.domain !== server.domain) {
+
+  if (clientMode !== server.mode) {
     issues.push(
-      `VITE_NEAR_AUTH_DOMAIN=${client.domain} does not match NEAR_AUTH_DOMAIN=${server.domain}`,
+      `VITE_AUTH_MODE=${clientMode} does not match AUTH_MODE=${server.mode}`,
     );
   }
-  if (client.audience !== server.audience) {
-    issues.push(
-      `VITE_NEAR_AUTH_AUDIENCE=${client.audience} does not match NEAR_AUTH_AUDIENCE=${server.audience}`,
-    );
-  }
-  if (client.fastAuthContractId !== server.fastAuthContractId) {
-    issues.push(
-      `VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID=${client.fastAuthContractId} does not match NEAR_AUTH_FAST_AUTH_CONTRACT_ID=${server.fastAuthContractId}`,
-    );
-  }
-  if (client.mpcContractId !== server.mpcContractId) {
-    issues.push(
-      `VITE_NEAR_AUTH_MPC_CONTRACT_ID=${client.mpcContractId} does not match NEAR_AUTH_MPC_CONTRACT_ID=${server.mpcContractId}`,
-    );
+
+  if (server.mode === "auth0") {
+    const clientDomain = (env.VITE_AUTH0_DOMAIN ?? "").trim().toLowerCase();
+    const clientId = (env.VITE_AUTH0_CLIENT_ID ?? "").trim();
+    const clientAudience =
+      (env.VITE_AUTH0_AUDIENCE ?? "").trim() || clientId;
+
+    if (!clientDomain) {
+      issues.push("VITE_AUTH0_DOMAIN is required for AUTH_MODE=auth0");
+    } else if (clientDomain !== server.domain) {
+      issues.push(
+        `VITE_AUTH0_DOMAIN=${clientDomain} does not match AUTH0_DOMAIN=${server.domain}`,
+      );
+    }
+    if (!clientId) {
+      issues.push("VITE_AUTH0_CLIENT_ID is required for AUTH_MODE=auth0");
+    } else if (clientId !== server.clientId) {
+      issues.push(
+        `VITE_AUTH0_CLIENT_ID=${clientId} does not match AUTH0_CLIENT_ID=${server.clientId}`,
+      );
+    }
+    if (clientAudience !== server.audience) {
+      issues.push(
+        `VITE_AUTH0_AUDIENCE=${clientAudience} does not match AUTH0_AUDIENCE=${server.audience}`,
+      );
+    }
+  } else {
+    const client = {
+      network:
+        env.VITE_NEAR_AUTH_NETWORK ?? NEAR_AUTH_TESTNET_DEFAULTS.network,
+      domain: normalizeDomain(
+        env.VITE_NEAR_AUTH_DOMAIN ?? NEAR_AUTH_TESTNET_DEFAULTS.domain,
+        "VITE_NEAR_AUTH_DOMAIN",
+      ),
+      audience:
+        env.VITE_NEAR_AUTH_AUDIENCE ?? NEAR_AUTH_TESTNET_DEFAULTS.audience,
+      fastAuthContractId:
+        env.VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID ??
+        NEAR_AUTH_TESTNET_DEFAULTS.fastAuthContractId,
+      mpcContractId:
+        env.VITE_NEAR_AUTH_MPC_CONTRACT_ID ??
+        NEAR_AUTH_TESTNET_DEFAULTS.mpcContractId,
+    };
+
+    if (client.network !== "testnet") {
+      issues.push("VITE_NEAR_AUTH_NETWORK must be testnet");
+    }
+    if (client.domain !== server.domain) {
+      issues.push(
+        `VITE_NEAR_AUTH_DOMAIN=${client.domain} does not match NEAR_AUTH_DOMAIN=${server.domain}`,
+      );
+    }
+    if (client.audience !== server.audience) {
+      issues.push(
+        `VITE_NEAR_AUTH_AUDIENCE=${client.audience} does not match NEAR_AUTH_AUDIENCE=${server.audience}`,
+      );
+    }
+    if (client.fastAuthContractId !== server.fastAuthContractId) {
+      issues.push(
+        `VITE_NEAR_AUTH_FAST_AUTH_CONTRACT_ID=${client.fastAuthContractId} does not match NEAR_AUTH_FAST_AUTH_CONTRACT_ID=${server.fastAuthContractId}`,
+      );
+    }
+    if (client.mpcContractId !== server.mpcContractId) {
+      issues.push(
+        `VITE_NEAR_AUTH_MPC_CONTRACT_ID=${client.mpcContractId} does not match NEAR_AUTH_MPC_CONTRACT_ID=${server.mpcContractId}`,
+      );
+    }
   }
 
   if (issues.length > 0) {
     throw new Error(
-      `NEAR Auth client/server configuration mismatch:\n- ${issues.join("\n- ")}`,
+      `Auth client/server configuration mismatch:\n- ${issues.join("\n- ")}`,
     );
   }
 }
@@ -167,12 +278,32 @@ export function createEphemeralSessionSecret(): string {
   return randomBytes(48).toString("base64url");
 }
 
-function normalizeDomain(raw: string): string {
+function parseAuthMode(env: Record<string, string | undefined>): AuthMode {
+  const raw = env.AUTH_MODE?.trim().toLowerCase();
+  if (raw === "auth0" || raw === "near") return raw;
+  if (raw) {
+    throw new Error("AUTH_MODE must be either near or auth0");
+  }
+  // Preserve the original local default, while allowing an Auth0-only .env to
+  // opt in without a separate AUTH_MODE line.
+  return env.AUTH0_DOMAIN ? "auth0" : "near";
+}
+
+function parseClientAuthMode(
+  env: Record<string, string | undefined>,
+): AuthMode {
+  const raw = env.VITE_AUTH_MODE?.trim().toLowerCase();
+  if (raw === "auth0" || raw === "near") return raw;
+  if (raw) {
+    throw new Error("VITE_AUTH_MODE must be either near or auth0");
+  }
+  return env.VITE_AUTH0_DOMAIN ? "auth0" : "near";
+}
+
+function normalizeDomain(raw: string, name: string): string {
   const value = raw.trim();
   if (!value || value.includes("://") || value.includes("/")) {
-    throw new Error(
-      "NEAR_AUTH_DOMAIN must be a hostname without a scheme or path",
-    );
+    throw new Error(`${name} must be a hostname without a scheme or path`);
   }
   return value.toLowerCase();
 }
@@ -180,6 +311,8 @@ function normalizeDomain(raw: string): string {
 function normalizeIssuer(
   configured: string | undefined,
   domain: string,
+  issuerName: string,
+  domainName: string,
 ): string {
   const expected = `https://${domain}/`;
   if (!configured) return expected;
@@ -187,22 +320,26 @@ function normalizeIssuer(
   const normalized = configured.endsWith("/") ? configured : `${configured}/`;
   if (normalized !== expected) {
     throw new Error(
-      `NEAR_AUTH_ISSUER must match https://\${NEAR_AUTH_DOMAIN}/ (expected ${expected})`,
+      `${issuerName} must match the configured ${domainName} (expected ${expected})`,
     );
   }
   return normalized;
 }
 
-function validateJwksUri(jwksUri: string, domain: string): void {
+function validateJwksUri(
+  jwksUri: string,
+  domain: string,
+  name: string,
+): void {
   let url: URL;
   try {
     url = new URL(jwksUri);
   } catch {
-    throw new Error("NEAR_AUTH_JWKS_URL must be a valid HTTPS URL");
+    throw new Error(`${name} must be a valid HTTPS URL`);
   }
   if (url.protocol !== "https:" || url.host !== domain) {
     throw new Error(
-      "NEAR_AUTH_JWKS_URL must use HTTPS and the same host as NEAR_AUTH_DOMAIN",
+      `${name} must use HTTPS and the same host as the Auth0 domain`,
     );
   }
 }

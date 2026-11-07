@@ -149,7 +149,7 @@ async function handleRequest(
       throw new EconomyHttpError(
         401,
         "UNAUTHORIZED",
-        "Sign in with NEAR Auth to use the market economy",
+        "Sign in to use the market economy",
       );
     }
 

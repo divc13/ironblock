@@ -9,6 +9,7 @@ export type SettlementErrorCode =
   | "UNKNOWN_TOKEN"
   | "INSUFFICIENT_BALANCE"
   | "RECEIVER_MISMATCH"
+  | "NEAR_ACCOUNT_REQUIRED"
   | "CONFLICT"
   | "PENDING"
   | "TIMEOUT"

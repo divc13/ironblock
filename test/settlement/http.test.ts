@@ -77,6 +77,7 @@ async function makeSessionToken(
     {
       playerId,
       displayName: "Tester",
+      authMode: "near",
       nearPublicKey: "ed25519:9RBws9u5jKencGEaxVuV4FXY85Ue22TwTozMxYDG8ryh",
       nearAccountId,
       auth0SubjectHash: `hash-${playerId}`,

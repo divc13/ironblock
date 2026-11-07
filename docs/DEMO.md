@@ -30,23 +30,28 @@ settlement proof. It is **testnet only**; no real money is used or custodied.
 
 ### Prerequisites
 
-- **Node 22 or newer** and npm.
-- `npm install`.
-- A `.env` copied from `.env.example`.
-- A random **`NEAR_AUTH_SESSION_SECRET` of at least 32 characters**.
+- A modern browser with popups allowed for the demo origin.
+- Public demo: open **<https://ironblock.up.railway.app>**.
+- Local fallback: **Node 22 or newer**, npm, `npm install`, and a `.env` copied
+  from `.env.example` with `AUTH_MODE=auth0`, the `AUTH0_*`/`VITE_AUTH0_*` values,
+  and a random **`NEAR_AUTH_SESSION_SECRET` of at least 32 characters**.
 - `npm run dev`, then open **exactly** <http://localhost:3000>.
+- Local `AUTH_MODE=near` remains available for NEAR Auth/MPC testing; it is not
+  the public login path.
 
 ```bash
 node --version          # v22 or newer
 npm install
 cp .env.example .env
-# Edit .env and set NEAR_AUTH_SESSION_SECRET to a random 32+ character value.
-# Generate one once with: openssl rand -base64 48
+# Set NEAR_AUTH_SESSION_SECRET, then set AUTH_MODE=auth0 and the Auth0 block.
+# Generate a secret once with: openssl rand -base64 48
 npm run dev
 ```
 
-Open <http://localhost:3000>, **not** `http://127.0.0.1:3000` and not another
-port. The shared NEAR Auth testnet Auth0 application only allows the exact
+For local Auth0 login, add `http://localhost:3000` (and its trailing-slash
+variant) to the Auth0 application’s callback URLs and web origins. For local
+`near` mode, open <http://localhost:3000>, **not** `http://127.0.0.1:3000` and
+not another port; the shared NEAR Auth testnet application only allows the exact
 `http://localhost:3000` callback.
 
 Optional preflight in a second terminal:
@@ -61,14 +66,17 @@ npm run config:check
    **“Continue with Google”** and **“Continue with email”**.
 2. Choose **one** method and complete the Auth0 flow in the single popup.
 3. There is **no wallet extension, seed phrase, wallet popup or gas prompt**.
-   The NEAR key is derived by the MPC network; the app never receives a private
+   In public Auth0 mode the player supplies a NEAR payout address; it is only a
+   withdrawal destination and is never used to sign. In local `near` mode the
+   NEAR key is derived by the MPC network and the app never receives a private
    key.
-4. After Auth0 returns, the overlay shows **“Session verified. Entering the
-   town…”** and the page reloads **once**. That reload is intentional; wait for
-   the town and the **“Live market”** chip.
-
-The HUD visible behind the sign-in overlay is local mock data. Do not quote its
-prices or balances as live.
+4. After Auth0 returns, the overlay offers an optional **NEAR payout address**
+   field. Enter a testnet account you control, or choose **“Skip for now”**.
+   Withdrawals stay disabled until an address is set; it can also be set later
+   from the withdrawal panel.
+5. The overlay shows **“Session verified. Entering the town…”** and the game
+   starts in place. There is no guest mode and no mock economy behind the login
+   screen.
 
 ---
 
@@ -231,7 +239,8 @@ when narrating the live run.
 
 Open a new tab at the exact route:
 
-**<http://localhost:3000/spectator>**
+- Public: **<https://ironblock.up.railway.app/spectator>**
+- Local: **<http://localhost:3000/spectator>**
 
 Wait for the top-bar badge to read **LIVE**. If it reads **DEMO REPLAY**, the
 live API is unavailable and the page is running the same deterministic engine
@@ -280,9 +289,11 @@ A testnet RPC check at documentation time also showed the treasury’s
 - **Testnet only.** These are testnet NEP-245 tokens, not real assets.
 - **Treasury-mediated.** The server signs `mt_transfer` from the treasury; the
   player never signs a transaction or pays gas.
-- **The receiver is the logged-in player’s MPC-derived implicit account** for a
-  live withdrawal. A client cannot request a different receiver. The recorded
-  proof above went to a fresh smoke-test implicit account, not to a player.
+- **The receiver is the logged-in player’s saved payout account** for a live
+  withdrawal. In public Auth0 mode it is player-supplied and optional until set;
+  in local `near` mode it is the MPC-derived implicit account. A client cannot
+  request a different receiver. The recorded proof above went to a fresh
+  smoke-test implicit account, not to a player.
 - This phase has **no deposits, no burn, and no player-signed transfers**.
 
 ---
@@ -294,12 +305,12 @@ trail, every shock leaves an event, and every item can settle on NEAR testnet.�
 
 | Real | Simulated / honest limitation |
 | --- | --- |
-| Auth0 + NEAR Auth MPC login on testnet; no wallet or seed phrase. | The market, merchants, bankruptcies, rescue, orders and caravan are a deterministic simulation, not real-world market data. |
+| Public Auth0 Google/email login; optional local NEAR Auth/MPC path. No wallet or seed phrase in the public path. | The market, merchants, bankruptcies, rescue, orders and caravan are a deterministic simulation, not real-world market data. |
 | NEP-245 v2 contract deployed at `v2.ironblock-items.testnet`; the recorded transfer is a real testnet transaction. | IB is in-game currency. In-game balances are off-chain claims backed by treasury inventory; no real money is custodied. |
 | Server-authoritative economy and a read-only spectator API. | Auth sessions, revocation and rate limits are in memory; run one process. A restart clears sessions. |
 | The spectator can show the live server state. | If the API is unavailable it labels itself **DEMO REPLAY** and runs locally; that is not live data. |
 | The price tooltip is the actual pricing pipeline. | Settlement is testnet-only, treasury-mediated, with no deposits, burn or player-signed transfers. |
-| The proof transaction is `FINAL` on testnet. | A public deployment also needs the shared Auth0 tenant to allow its callback origin; locally the callback is exactly `http://localhost:3000`. |
+| The proof transaction is `FINAL` on testnet. | Public login requires the deployment Auth0 tenant to allow the deployment origin. The player-supplied payout address is a withdrawal destination, not a verified NEAR identity. |
 
 **Close:** “That’s Ironblock: a small town where the economy is playable,
 observable, and honest about what is simulated.”
@@ -310,13 +321,13 @@ observable, and honest about what is simulated.”
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| HUD says **Mock market** or numbers don’t match the live town. | You are signed out; the HUD behind the login overlay is local mock data. | Complete one Auth0 login and wait for the **Live market** chip. |
-| The page reloads immediately after login. | Intentional one-shot reload so the world module rebuilds with the stored session. | Wait for the town to reconnect. Don’t click login again during the reload. |
-| Storage-disabled browsers may loop back to login. | `sessionStorage` is blocked, so the session cache and one-shot reload marker cannot persist. | Use a normal window, allow site storage, or avoid private/embedded webviews. |
-| Auth0 says the callback URL is wrong. | The origin is not the exact allowed callback. | Use `http://localhost:3000`; never `127.0.0.1` or another port. |
-| Dev server exits because port 3000 is in use. | Vite uses `strictPort: true`; the Auth0 callback is tied to 3000. | `lsof -nP -iTCP:3000 -sTCP:LISTEN`, stop the other process, rerun `npm run dev`. Do not switch ports. |
+| The login overlay stays open after the Auth0 popup. | The popup was blocked, closed early, or the server rejected the ID token. | Allow popups for the demo origin, complete one Google/email flow, and check the browser console plus `/api/auth/health`. |
+| Auth0 says the callback URL is wrong. | The origin is not in the Auth0 application’s allowed callback list. | Add the exact public origin or `http://localhost:3000` (and trailing-slash variants) to **Allowed Callback URLs** and **Allowed Web Origins**. |
+| The game does not start after login. | The server-issued game session could not connect to the WebSocket. | Check `/api/auth/health` mode, then reload once. Sessions are in memory, so a server restart invalidates them. |
+| “Set a NEAR payout address” blocks withdrawal. | Public Auth0 login does not create a NEAR identity; the payout address is player-supplied. | Set a testnet account in the withdrawal panel, then retry. The address is a payout destination, not a login credential. |
+| Storage-disabled browsers return to login. | The game session cannot be cached or restored. | Use a normal window and allow site storage; private/embedded webviews may not work. |
+| Dev server exits because port 3000 is in use. | Vite uses `strictPort: true`; the local Auth0 callback uses port 3000. | `lsof -nP -iTCP:3000 -sTCP:LISTEN`, stop the other process, rerun `npm run dev`. Do not switch ports. |
 | `NEAR_AUTH_SESSION_SECRET` is missing. | Development can use an ephemeral secret; production cannot. | Set a random 32+ character value in `.env`. In dev, sessions reset on restart until you do. |
-| The Auth0 popup does not open. | Browser popup blocker. | Allow popups for `localhost:3000`, then click one login button again. |
 | `/spectator` is 404 or shows **DEMO REPLAY**. | The observability integration is not mounted, or the live API is down. | Use the integrated Phase 2 build and check `/api/market/snapshot`; for the judge path, use the **LIVE** dashboard. |
 | Fast-forward numbers differ from this page. | The live world already includes your trades; the checkpoint is a fresh world. | Use the events shown, and quote `npm run sim -- --days 7` for the canonical 2/1/415/≈3 s numbers. |
 

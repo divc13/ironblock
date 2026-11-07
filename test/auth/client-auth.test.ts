@@ -21,8 +21,10 @@ function session(
       displayName: "player",
       nearPublicKey: "ed25519:test",
       nearAccountId: "0123",
+      nearAccountSource: "mpc",
       auth0SubjectHash: "0123456789abcdef",
     },
+    authMode: "near",
     ...overrides,
   };
 }

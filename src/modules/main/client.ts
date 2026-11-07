@@ -1,7 +1,7 @@
 import { defineModule, type RpgClient, type RpgClientEngine } from '@rpgjs/client'
 import { createEconomyRuntime } from '../../client/economy'
 import { HttpEconomyClient } from '../../client/economy/http'
-import { readNearAuthSession } from '../../client/auth/near-auth'
+import { readAuthSession } from '../../client/auth/session'
 import { resolveWorldSpritesheet } from '../../client/world-sprites'
 import { charactersWithMap } from '../../config/characters'
 import { economy } from '../../config/economy'
@@ -360,22 +360,20 @@ export default defineModule<RpgClient>({
       }
 
       activeEngine = engine
-      const session = readNearAuthSession()
-      const serverClient = session
-        ? new HttpEconomyClient({ sessionToken: session.sessionToken })
-        : undefined
-      const runtime = createEconomyRuntime({ serverClient })
-      if (!serverClient) {
-        runtime.note =
-          'No NEAR Auth session — running the local demo economy. Sign in to trade on the authoritative market.'
-        runtime.fellBackToMock = true
-        console.warn(`[Ironblock] ${runtime.note}`)
+      const session = readAuthSession()
+      if (!session) {
+        // The boot path only starts the game after authentication. Fail closed
+        // if something else starts the client module directly.
+        console.warn('[Ironblock] no authenticated session; refusing to mount the economy UI')
+        return false
       }
+      const serverClient = new HttpEconomyClient({ sessionToken: session.sessionToken })
+      const runtime = createEconomyRuntime({ serverClient })
       mountedClient = runtime.client
       ui = mountIronblockUI({
         client: runtime.client,
         note: runtime.note,
-        fellBackToMock: runtime.fellBackToMock,
+        fellBackToMock: false,
         onNavigate: target => {
           guideTarget = target
           updateWaypoint()

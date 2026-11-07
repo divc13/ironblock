@@ -8,9 +8,19 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const configFile = join(projectRoot, "vite.config.ts");
 const secret = "production-auth-smoke-secret-that-is-long-enough-1234567890";
 const base = "/quest/";
+const auth0Domain = "dev-y6d3ancokvaznjrh.us.auth0.com";
+const auth0ClientId = "5yM76v1griNYFvF8jNz2i8YfIytTm8wF";
 
 process.env.NEAR_AUTH_SESSION_SECRET = secret;
 process.env.RPG_TYPE = "mmorpg";
+process.env.AUTH_MODE = "auth0";
+process.env.AUTH0_DOMAIN = auth0Domain;
+process.env.AUTH0_CLIENT_ID = auth0ClientId;
+process.env.AUTH0_AUDIENCE = auth0ClientId;
+process.env.VITE_AUTH_MODE = "auth0";
+process.env.VITE_AUTH0_DOMAIN = auth0Domain;
+process.env.VITE_AUTH0_CLIENT_ID = auth0ClientId;
+process.env.VITE_AUTH0_AUDIENCE = auth0ClientId;
 
 const closePreview = (server) =>
   new Promise((resolve, reject) => {
@@ -18,6 +28,14 @@ const closePreview = (server) =>
   });
 
 async function assertAuthRoutes(origin, prefix) {
+  const auth0 = await fetch(`${origin}${prefix}/api/auth/auth0`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(auth0.status, 400);
+  assert.notEqual(auth0.status, 404);
+
   const near = await fetch(`${origin}${prefix}/api/auth/near`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -37,7 +55,8 @@ async function assertAuthRoutes(origin, prefix) {
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
     status: "ok",
-    service: "near-auth",
+    service: "ironblock-auth",
+    mode: "auth0",
     network: "testnet",
   });
 
@@ -51,7 +70,7 @@ async function assertAuthRoutes(origin, prefix) {
   assert.deepEqual(await economy.json(), {
     error: {
       code: "UNAUTHORIZED",
-      message: "Sign in with NEAR Auth to use the market economy",
+      message: "Sign in to use the market economy",
     },
   });
 }
@@ -113,6 +132,7 @@ test("built app exposes auth routes in preview and the production host", async (
     assert.match(csp, /default-src 'self'/);
     assert.match(csp, /script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'/);
     assert.match(csp, /connect-src 'self' data: blob:/);
+    assert.match(csp, new RegExp(`https://${auth0Domain.replaceAll(".", "\\.")}`));
     assert.equal(health.headers.get("x-content-type-options"), "nosniff");
   } finally {
     await host.close();

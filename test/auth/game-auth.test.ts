@@ -52,6 +52,7 @@ describe("authenticateGameSocket", () => {
         sessionId: issued.claims.sessionId,
         nearPublicKey: issued.claims.nearPublicKey,
         nearAccountId: issued.claims.nearAccountId,
+        nearAccountSource: issued.claims.nearAccountSource,
         auth0SubjectHash: issued.claims.auth0SubjectHash,
         displayName: issued.claims.displayName,
       },

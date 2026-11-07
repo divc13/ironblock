@@ -96,8 +96,8 @@ export interface WithdrawRequest {
   tokenId: string;
   amount: NftAmount | number;
   /**
-   * Must equal the logged-in player's MPC-derived implicit account. Kept as a
-   * parameter so the protocol is explicit, never trusted from the client.
+   * Must equal the session's saved NEAR payout account. Kept as a parameter so
+   * the protocol is explicit, never trusted from the client.
    */
   receiver?: string;
 }

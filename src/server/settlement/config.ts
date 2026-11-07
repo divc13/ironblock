@@ -1,4 +1,10 @@
+import {
+  isImplicitAccountId,
+  isValidNearAccountId,
+} from "../../shared/auth/near-account";
 import { SettlementError } from "./errors";
+
+export { isImplicitAccountId, isValidNearAccountId };
 
 /**
  * Server-only settlement configuration (NEAR testnet only).
@@ -39,20 +45,7 @@ const DEFAULTS = {
   explorerTxUrl: "https://explorer.testnet.near.org/transactions/",
 } as const;
 
-const ACCOUNT_ID_RE = /^[a-z0-9._-]{2,64}$/;
-const HEX_IMPL_RE = /^[0-9a-f]{64}$/;
-
 export const SETTLEMENT_DEFAULTS = DEFAULTS;
-
-/** True for the MPC-derived implicit accounts used by NEAR Auth login. */
-export function isImplicitAccountId(accountId: string): boolean {
-  return HEX_IMPL_RE.test(accountId);
-}
-
-export function isValidNearAccountId(accountId: string): boolean {
-  if (HEX_IMPL_RE.test(accountId)) return true;
-  return ACCOUNT_ID_RE.test(accountId) && !accountId.includes("..");
-}
 
 export function explorerTxUrl(explorerBase: string, txHash: string): string {
   return `${explorerBase}${txHash}`;
