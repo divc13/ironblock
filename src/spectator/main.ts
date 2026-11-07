@@ -15,6 +15,8 @@ import { buildRecap } from '../server/observability/recap'
 import type { EconomyConfig, ItemId, MarketEventType, MerchantId } from '../shared/types'
 import { createFeed, type MarketFeed, type MarketStreamMessage } from './api'
 import { FastForwardPlayback, type PlaybackItem, type PlaybackProgress } from './playback'
+import { merchantCashChange } from './merchant-change'
+import { calendarDayIndex, weekDayAxis, weekPointLabel } from './week-time'
 import {
   renderCashChangeChart as renderCashChangeSvg,
   renderFlowChart as renderFlowSvg,
@@ -216,6 +218,8 @@ let activeFlowReveal = -1
 let activeHeatmapView: HeatmapView | null = null
 let activeHeatmapKey = ''
 let heatmapMode: HeatmapMode = 'price'
+let lastBriefMarkdown = ''
+let briefCopyTimer = 0
 
 interface MerchantMirror {
   cash?: number
@@ -400,6 +404,52 @@ function wireStaticEvents(): void {
   })
   $('view-live').addEventListener('click', returnToLive)
 
+  $('ff-pause').addEventListener('click', () => {
+    const playback = weekRun?.playback
+    if (!playback) return
+    if (playback.paused) playback.resume()
+    else playback.pause()
+  })
+  $('ff-step-back').addEventListener('click', () => {
+    weekRun?.playback?.step(-1)
+  })
+  $('ff-step').addEventListener('click', () => {
+    weekRun?.playback?.step(1)
+  })
+  $('ff-strip').addEventListener('keydown', event => {
+    const target = event.target as HTMLElement
+    if (target.closest('button, a, input, select, textarea')) return
+    if (event.key === ' ' || event.key === 'Spacebar') {
+      event.preventDefault()
+      const playback = weekRun?.playback
+      if (!playback || playback.phase === 'done' || playback.phase === 'idle') return
+      if (playback.paused) playback.resume()
+      else playback.pause()
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      weekRun?.playback?.step(1)
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      weekRun?.playback?.step(-1)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      if (weekRun?.playback && weekRun.playback.phase !== 'done') weekRun.playback.skipToEnd()
+    }
+  })
+
+  $('brief-copy').addEventListener('click', () => void copyBrief())
+  $('brief-content').addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-brief-story]')
+    if (!button?.dataset.briefStory) return
+    openStoryItem(button.dataset.briefStory)
+  })
+
+  $('annotation-list').addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-annotation-index]')
+    if (!button) return
+    activateAnnotation(Number(button.dataset.annotationIndex))
+  })
+
   $('price-history-market').addEventListener('change', event => {
     priceHistoryMarket = (event.target as HTMLSelectElement).value || 'town'
     if (activePriceHistoryView?.mode === 'week' && weekRun) {
@@ -530,10 +580,33 @@ function wireStaticEvents(): void {
     if (event.key === 'Escape') hidePriceTooltip()
   })
 
+  const historyChart = $('price-history-chart')
+  const markerFromTarget = (target: EventTarget | null): HTMLElement | null =>
+    (target as Element | null)?.closest<HTMLElement>('[data-marker-index]') ?? null
+  historyChart.addEventListener('click', event => {
+    const marker = markerFromTarget(event.target)
+    if (!marker) return
+    activateAnnotation(Number(marker.dataset.markerIndex))
+  })
+  historyChart.addEventListener('keydown', event => {
+    const marker = markerFromTarget(event.target)
+    if (!marker) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    activateAnnotation(Number(marker.dataset.markerIndex))
+  })
+  historyChart.addEventListener('focusin', event => {
+    const marker = markerFromTarget(event.target)
+    if (!marker) return
+    const x = Number(marker.dataset.markerX)
+    if (Number.isFinite(x)) setFromIndex('price-history', x)
+  })
+
   let resizeFrame = 0
   window.addEventListener('resize', () => {
     cancelAnimationFrame(resizeFrame)
     resizeFrame = requestAnimationFrame(() => {
+      syncChromeMetrics()
       if (activePriceView) renderPriceCard(activePriceView, activePriceReveal, true)
       if (activePriceHistoryView) renderPriceHistoryCard(activePriceHistoryView, true)
       if (activeVolumeView) renderVolumeCard(activeVolumeView, activeVolumeCount, true)
@@ -546,6 +619,12 @@ function wireStaticEvents(): void {
       refreshCrosshair()
     })
   })
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(() => syncChromeMetrics())
+    observer.observe($('topbar'))
+    observer.observe($('section-nav'))
+  }
+  syncChromeMetrics()
 
   for (const [id, elementId] of [
     ['price', 'price-chart-wrap'],
@@ -637,7 +716,14 @@ async function boot(): Promise<void> {
   }
 
   try {
-    snapshot = await feed.getSnapshot()
+    // Reuse the snapshot that validated the live API (or came from the demo
+    // feed) instead of issuing a duplicate full GET. If SSE already delivered
+    // a newer snapshot while the proof request was in flight, keep that one.
+    if (created.initialSnapshot && (!snapshot || created.initialSnapshot.sequence >= snapshot.sequence)) {
+      snapshot = created.initialSnapshot
+    } else if (!snapshot) {
+      snapshot = await feed.getSnapshot()
+    }
     mergeEvents(snapshot.recentEvents)
     seedPriceHistory()
     renderLiveAll()
@@ -684,6 +770,10 @@ function renderModeBadge(): void {
   badge.classList.toggle('demo', !live && !previewing)
   badge.classList.toggle('preview', previewing)
   $('mode-text').textContent = previewing ? 'PREVIEW' : live ? 'LIVE' : 'DEMO'
+  document.body.classList.toggle('is-preview', previewing)
+  document.body.classList.toggle('is-live', live && !previewing)
+  const pill = $('preview-pill') as HTMLElement
+  pill.hidden = !previewing
   badge.title = previewing
     ? 'Simulated 7-day preview · live town unchanged, result not saved'
     : live
@@ -731,6 +821,7 @@ function renderLiveAll(): void {
   $('hero-context').textContent = liveContextLabel()
   $('view-live').hidden = true
   $('clock-chip').classList.remove('is-preview')
+  $('topbar').classList.remove('is-complete')
   renderClock(current.day)
   renderHero({
     title: status.title,
@@ -747,6 +838,8 @@ function renderLiveAll(): void {
   renderPriceCard(buildLivePriceView(current), 1)
   renderPriceHistoryCard(buildLivePriceHistoryView(current), true)
   const stallView = buildLiveStallView(current)
+  const recap = buildRecap(current, config)
+  renderBrief(buildLiveBrief(current, recap, stallView))
   renderStallRiskCard(stallView, true)
   renderCashChangeCard(stallView, true)
   renderWealthCard(buildLiveWealthRows(current), 1, 'live')
@@ -763,7 +856,7 @@ function renderLiveAll(): void {
   renderMerchantCards()
   renderTape()
   renderEventStream()
-  renderNewspaper(buildRecap(current, config), false)
+  renderNewspaper(recap, false)
   renderRunProof()
 }
 
@@ -796,6 +889,317 @@ function renderHero(view: HeroView): void {
     'aria-label',
     `Day ${view.day}. ${view.open} stalls open. ${money0(view.cash)} cash in town. ${units(view.volume)} units traded.`,
   )
+}
+
+interface BriefMetric {
+  label: string
+  value: string
+  note: string
+  tone?: 'up' | 'down' | 'neutral'
+}
+
+interface BriefCause {
+  title: string
+  chain: string
+  storyId?: string
+}
+
+interface BriefView {
+  kicker: string
+  title: string
+  scope: string
+  lead: string
+  metrics: BriefMetric[]
+  causes: BriefCause[]
+  markdown: string
+}
+
+interface BriefLink {
+  label: string
+  href: string
+}
+
+const BRIEF_LINKS: BriefLink[] = [
+  { label: 'Price paths', href: '#price-paths' },
+  { label: 'Cash changes', href: '#cash-changes' },
+  { label: 'Stall risk', href: '#stall-risk' },
+  { label: 'Activity', href: '#bot-activity' },
+  { label: 'Proof', href: '#proof-details' },
+]
+
+function signedMoney(value: number): string {
+  return `${value >= 0 ? '+' : '−'}${money0(Math.abs(value))}`
+}
+
+function riskiestStall(rows: StallRowView[]): StallRowView | null {
+  return (
+    [...rows].sort(
+      (left, right) =>
+        left.liquidity - right.liquidity ||
+        left.stockCover - right.stockCover ||
+        left.cash - right.cash,
+    )[0] ?? null
+  )
+}
+
+function briefMarkdown(view: BriefView): string {
+  const metrics = view.metrics.map(metric => `- **${metric.label}:** ${metric.value} — ${metric.note}`).join('\n')
+  const causes = view.causes
+    .map(cause => `- **${cause.title}** — ${cause.chain}`)
+    .join('\n')
+  const links = BRIEF_LINKS.map(
+    link => `[${link.label}](${new URL(link.href, location.href).href})`,
+  ).join(' · ')
+  return `# ${view.title}\n\n_${view.scope}_\n\n${view.lead}\n\n${metrics}\n\n## Why\n\n${causes || '- No causal notes were recorded.'}\n\n${links}`
+}
+
+function renderBrief(view: BriefView): void {
+  $('brief-kicker').textContent = view.kicker
+  $('week-brief-title').textContent = view.title
+  $('brief-scope').textContent = view.scope
+  lastBriefMarkdown = view.markdown
+  const causes =
+    view.causes.length === 0
+      ? '<p class="brief-cause-empty">No causal notes were recorded for this window.</p>'
+      : `<ul class="brief-cause-list">${view.causes
+          .map(cause => {
+            const body = `<strong>${esc(cause.title)}</strong><span>${esc(cause.chain)}</span>`
+            return cause.storyId
+              ? `<li><button class="brief-cause" type="button" data-brief-story="${esc(
+                  cause.storyId,
+                )}" aria-label="${esc(`${cause.title}. ${cause.chain}. Open the matching story.`)}">${body}<span class="brief-cause-link" aria-hidden="true">Open story →</span></button></li>`
+              : `<li><div class="brief-cause is-static">${body}</div></li>`
+          })
+          .join('')}</ul>`
+  $('brief-content').innerHTML = `<p class="brief-lead">${esc(view.lead)}</p>
+    <div class="brief-metrics">${view.metrics
+      .map(
+        metric => `<article class="brief-metric${metric.tone ? ` tone-${metric.tone}` : ''}">
+          <span class="brief-metric-label">${esc(metric.label)}</span>
+          <strong class="brief-metric-value">${esc(metric.value)}</strong>
+          <span class="brief-metric-note">${esc(metric.note)}</span>
+        </article>`,
+      )
+      .join('')}</div>
+    <div class="brief-bottom">
+      <div class="brief-why">
+        <h3>Why the week moved</h3>
+        ${causes}
+      </div>
+      <nav class="brief-links" aria-label="Go deeper">
+        ${BRIEF_LINKS.map(link => `<a href="${link.href}">${esc(link.label)} <span aria-hidden="true">→</span></a>`).join('')}
+      </nav>
+    </div>`
+}
+
+function renderBriefPending(title: string, lead: string, scope: string): void {
+  $('brief-kicker').textContent = '7-day preview'
+  $('week-brief-title').textContent = title
+  $('brief-scope').textContent = scope
+  lastBriefMarkdown = ''
+  $('brief-content').innerHTML = `<p class="brief-lead">${esc(lead)}</p><p class="brief-pending">The brief fills in as the preview completes.</p>`
+}
+
+function buildLiveBrief(current: PublicSnapshot, recap: Recap, stalls: StallView): BriefView {
+  const merchantNow = merchantTotalCash(current)
+  const merchantStart = sum(Object.values(current.daily.merchantCashStart))
+  const cashDelta = merchantStart > 0 ? merchantNow - merchantStart : 0
+  const open = openStalls(current)
+  const recent = current.summaries.filter(summary => summary.day < current.day).slice(-7)
+  const average = recent.length > 0 ? sum(recent.map(summary => summary.trades.volume)) / recent.length : 0
+  const volume = current.daily.trades.volume
+  const mover = [...recap.topMovers].sort(
+    (left, right) => Math.abs(right.changePct) - Math.abs(left.changePct),
+  )[0]
+  const winner = stalls.rows[0] ?? null
+  const loser = stalls.rows[stalls.rows.length - 1] ?? null
+  const risk = riskiestStall(stalls.rows)
+  const causes: BriefCause[] = recap.story.slice(0, 2).map(line => ({
+    title: 'Today',
+    chain: line,
+  }))
+  const lead =
+    cashDelta === 0
+      ? `Day ${current.day} so far: ${open} of ${current.merchants.length} stalls open and ${units(
+          volume,
+        )} units traded. No opening till baseline is available yet.`
+      : `Day ${current.day} so far: stall tills are ${signedMoney(cashDelta)} since the day opened, with ${units(
+          volume,
+        )} units traded and ${open} of ${current.merchants.length} stalls open.`
+  const view: BriefView = {
+    kicker: 'Live snapshot',
+    title: 'Today in brief',
+    scope: 'Live · today so far',
+    lead,
+    metrics: [
+      {
+        label: 'Till cash today',
+        value: merchantStart > 0 ? signedMoney(cashDelta) : '—',
+        note: merchantStart > 0 ? `${money0(merchantNow)} in merchant tills now` : 'No day-open till baseline yet',
+        tone: cashDelta > 0.5 ? 'up' : cashDelta < -0.5 ? 'down' : 'neutral',
+      },
+      {
+        label: 'Biggest price move',
+        value: mover ? itemLabel(mover.itemId) : '—',
+        note: mover
+          ? `${signedPercent(mover.changePct)} from the day open · ${config?.merchants[mover.merchantId]?.displayName ?? mover.merchantId}`
+          : 'Waiting for today’s first quote',
+        tone: mover ? (mover.changePct >= 0 ? 'up' : 'down') : 'neutral',
+      },
+      {
+        label: 'Top till',
+        value: winner?.label ?? '—',
+        note: winner ? `${signedMoney(winner.delta)} today` : 'Waiting for merchant cash',
+        tone: winner && winner.delta > 0.5 ? 'up' : 'neutral',
+      },
+      {
+        label: 'Weakest till',
+        value: loser?.label ?? '—',
+        note: loser ? `${signedMoney(loser.delta)} today` : 'Waiting for merchant cash',
+        tone: loser && loser.delta < -0.5 ? 'down' : 'neutral',
+      },
+      {
+        label: 'Riskiest stall',
+        value: risk?.label ?? '—',
+        note: risk ? `${risk.liquidity.toFixed(2)}× cash · ${Math.round(risk.stockCover * 100)}% stock` : 'Waiting for risk data',
+        tone: risk && (risk.liquidity < 1 || risk.stockCover < 0.8) ? 'down' : 'neutral',
+      },
+      {
+        label: 'Trade pace',
+        value: average > 0 ? `${Math.round((volume / average) * 100)}%` : units(volume),
+        note: average > 0 ? `of the recent ${Math.round(average)}-unit daily average` : 'units traded today',
+        tone: average > 0 && volume < average * 0.55 ? 'down' : 'neutral',
+      },
+    ],
+    causes,
+    markdown: '',
+  }
+  view.markdown = briefMarkdown(view)
+  return view
+}
+
+function buildWeekBrief(state: WeekRun): BriefView {
+  const payload = state.payload
+  const last = state.series[state.series.length - 1]
+  const endCash = last ? last.totalMerchantCash + last.totalPlayerCash : state.startCash
+  const cashDelta = endCash - state.startCash
+  const cashPct = state.startCash > 0 ? (cashDelta / state.startCash) * 100 : 0
+  const moves = state.priceHistoryView.items
+    .map(item => {
+      const first = item.points[0]
+      const final = item.points[item.points.length - 1]
+      return first && final && first.price > 0
+        ? { item, change: ((final.price - first.price) / first.price) * 100 }
+        : null
+    })
+    .filter((value): value is { item: PriceItemView; change: number } => Boolean(value))
+    .sort((left, right) => Math.abs(right.change) - Math.abs(left.change))
+  const mover = moves[0]
+  const winner = state.stallView.rows[0] ?? null
+  const loser = state.stallView.rows[state.stallView.rows.length - 1] ?? null
+  const risk = riskiestStall(state.stallView.rows)
+  const annotationKinds = new Set(['bankruptcy', 'reopen', 'shock', 'caravan', 'rent', 'recovery', 'distribution', 'order-expired'])
+  const causes: BriefCause[] = [...(payload.annotations ?? [])]
+    .filter(annotation => annotationKinds.has(annotation.kind))
+    .sort((left, right) => annotationPriority(left.kind) - annotationPriority(right.kind) || left.time - right.time)
+    .slice(0, 2)
+    .map(annotation => ({
+      title: annotation.title,
+      chain: annotation.chain,
+      storyId: annotationStoryId(annotation),
+    }))
+  if (causes.length === 0) {
+    for (const line of payload.recap.story.slice(0, 2)) causes.push({ title: 'Week summary', chain: line })
+  }
+  const lead = `Day ${payload.startDay} → ${payload.endDay}: town cash ${
+    cashDelta >= 0 ? 'rose' : 'fell'
+  } ${money0(Math.abs(cashDelta))}${state.startCash > 0 ? ` (${signedPercent(cashPct)})` : ''}, from ${money0(
+    state.startCash,
+  )} to ${money0(endCash)}.${mover ? ` ${itemLabel(mover.item.id)} moved ${signedPercent(mover.change)} from its first close.` : ''}`
+  const view: BriefView = {
+    kicker: 'The week explained',
+    title: 'Week in brief',
+    scope: `Completed preview · Day ${payload.startDay}–${payload.endDay} · not saved`,
+    lead,
+    metrics: [
+      {
+        label: 'Town cash',
+        value: signedMoney(cashDelta),
+        note: `${money0(state.startCash)} → ${money0(endCash)}${state.startCash > 0 ? ` · ${signedPercent(cashPct)}` : ''}`,
+        tone: cashDelta > 0.5 ? 'up' : cashDelta < -0.5 ? 'down' : 'neutral',
+      },
+      {
+        label: 'Biggest move',
+        value: mover ? itemLabel(mover.item.id) : '—',
+        note: mover ? `${signedPercent(mover.change)} from its first close` : 'No item quote was recorded',
+        tone: mover ? (mover.change >= 0 ? 'up' : 'down') : 'neutral',
+      },
+      {
+        label: 'Top cash winner',
+        value: winner?.label ?? '—',
+        note: winner ? `${signedMoney(winner.delta)} over the preview` : 'No merchant cash recorded',
+        tone: winner && winner.delta > 0.5 ? 'up' : 'neutral',
+      },
+      {
+        label: 'Weakest till',
+        value: loser?.label ?? '—',
+        note: loser ? `${signedMoney(loser.delta)} over the preview` : 'No merchant cash recorded',
+        tone: loser && loser.delta < -0.5 ? 'down' : 'neutral',
+      },
+      {
+        label: 'Riskiest stall',
+        value: risk?.label ?? '—',
+        note: risk ? `${risk.liquidity.toFixed(2)}× cash · ${Math.round(risk.stockCover * 100)}% stock` : 'No final stall state',
+        tone: risk && (risk.liquidity < 1 || risk.stockCover < 0.8) ? 'down' : 'neutral',
+      },
+    ],
+    causes,
+    markdown: '',
+  }
+  view.markdown = briefMarkdown(view)
+  return view
+}
+
+async function copyBrief(): Promise<void> {
+  if (!lastBriefMarkdown) {
+    $('brief-copy-status').textContent = 'The brief is still filling in.'
+    return
+  }
+  const button = $('brief-copy') as HTMLButtonElement
+  let copied = false
+  try {
+    await navigator.clipboard.writeText(lastBriefMarkdown)
+    copied = true
+  } catch {
+    const area = document.createElement('textarea')
+    area.value = lastBriefMarkdown
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.append(area)
+    area.select()
+    try {
+      copied = document.execCommand('copy')
+    } finally {
+      area.remove()
+    }
+  }
+  $('brief-copy-status').textContent = copied ? 'Brief copied to clipboard.' : 'Copy failed. Select the brief text to copy it.'
+  button.textContent = copied ? 'Copied' : 'Copy failed'
+  window.clearTimeout(briefCopyTimer)
+  briefCopyTimer = window.setTimeout(() => {
+    button.textContent = 'Copy brief'
+  }, 2200)
+}
+
+function syncChromeMetrics(): void {
+  const topbar = $('topbar')
+  const nav = $('section-nav')
+  if (!topbar || !nav) return
+  const chrome = Math.round(topbar.getBoundingClientRect().height)
+  const navHeight = Math.round(nav.getBoundingClientRect().height)
+  document.documentElement.style.setProperty('--chrome-height', `${chrome}px`)
+  document.documentElement.style.setProperty('--scroll-offset', `${chrome + navHeight + 14}px`)
 }
 
 function liveStatus(current: PublicSnapshot, open: number): { title: string; tone: StoryTone } {
@@ -866,11 +1270,11 @@ function moverAverages(movers: Mover[], field: 'open' | 'close'): Map<ItemId, nu
 function collectDailyCloses(
   summaries: FastForwardClonePayload['summaries'],
   startDay: number,
-  days: number,
+  maxIndex: number,
 ): Map<ItemId, Map<number, number>> {
   const daily = new Map<ItemId, Map<number, number>>()
   const set = (itemId: ItemId, day: number, price: number): void => {
-    if (day < 1 || day > days || !Number.isFinite(price) || price <= 0) return
+    if (day < 1 || day > maxIndex || !Number.isFinite(price) || price <= 0) return
     const itemDays = daily.get(itemId) ?? new Map<number, number>()
     if (!itemDays.has(day)) itemDays.set(day, price)
     daily.set(itemId, itemDays)
@@ -878,7 +1282,7 @@ function collectDailyCloses(
 
   for (const summary of summaries) {
     const day = summary.day - startDay + 1
-    if (day < 1 || day > days) continue
+    if (day < 1 || day > maxIndex) continue
     for (const [itemId, price] of moverAverages(summary.topMovers, 'close')) set(itemId, day, price)
     for (const [itemId, price] of moverAverages(summary.topMovers, 'open')) set(itemId, day - 1, price)
   }
@@ -889,15 +1293,16 @@ function collectDailyCloses(
 function addEventCloses(
   daily: Map<ItemId, Map<number, number>>,
   events: SequencedMarketEvent[],
-  fromTime: number,
-  days: number,
+  startDay: number,
+  maxIndex: number,
 ): void {
   const latest = new Map<string, { time: number; itemId: ItemId; day: number; price: number }>()
   for (const event of events) {
     if (!event.item) continue
     const price = event.after.ask ?? event.before.ask
     if (price === null || !Number.isFinite(price) || price <= 0) continue
-    const day = clamp(Math.ceil((event.time - fromTime) / 86400), 1, days)
+    const day = calendarDayIndex(event.time, startDay)
+    if (day < 1 || day > maxIndex) continue
     const key = `${event.item}|${day}`
     const previous = latest.get(key)
     if (!previous || event.time > previous.time) latest.set(key, { time: event.time, itemId: event.item, day, price })
@@ -912,11 +1317,11 @@ function addEventCloses(
 function addRecapCloses(
   daily: Map<ItemId, Map<number, number>>,
   recap: FastForwardClonePayload['recap'],
-  days: number,
+  targetIndex: number,
 ): void {
   for (const [itemId, price] of moverAverages(recap.topMovers ?? [], 'close')) {
     const itemDays = daily.get(itemId) ?? new Map<number, number>()
-    if (!itemDays.has(days)) itemDays.set(days, price)
+    if (!itemDays.has(targetIndex)) itemDays.set(targetIndex, price)
     daily.set(itemId, itemDays)
   }
 }
@@ -948,7 +1353,11 @@ function finalizePriceView(
       : 'Price chart with no recorded item quotes yet.'
   const sourceNote =
     names.length > 0
-      ? `Showing the ${names.length} items with the most recorded quotes and biggest moves. Dashed spans are gaps in the sample.`
+      ? `Showing the ${names.length} items with the most recorded quotes and biggest moves. Dashed spans are gaps in the sample.${
+          labels[labels.length - 1] === 'Final'
+            ? ' Final is the partial day where the preview stopped; it is not a full close.'
+            : ''
+        }`
       : 'Recorded merchant quotes only. Dashed spans mean no quote was sampled that day.'
   return { mode, labels, items, key, ariaLabel, emptyText, sourceNote }
 }
@@ -966,21 +1375,34 @@ function emptyPriceView(mode: 'live' | 'week'): PriceView {
 
 function buildWeekPriceView(payload: FastForwardClonePayload, startSnapshot: PublicSnapshot | null): PriceView {
   const days = Math.max(1, payload.days)
-  const labels = ['Open', ...Array.from({ length: days }, (_, index) => `D${index + 1}`)]
+  const lastClose =
+    payload.priceHistory[payload.priceHistory.length - 1]?.endedAt ??
+    payload.summaries[payload.summaries.length - 1]?.endedAt ??
+    null
+  const axis = weekDayAxis(payload.startDay, days, payload.toTime, lastClose)
+  const maxIndex = axis.maxIndex
   const startPrices = startSnapshot ? averageAskByItem(startSnapshot) : new Map<ItemId, number>()
-  const daily = collectDailyCloses(payload.summaries, payload.startDay, days)
-  addEventCloses(daily, payload.events, payload.fromTime, days)
-  addRecapCloses(daily, payload.recap, days)
+  const daily = collectDailyCloses(payload.summaries, payload.startDay, maxIndex)
+  addEventCloses(daily, payload.events, payload.startDay, maxIndex)
+  const finalIndex = axis.partialIndex ?? Math.min(maxIndex, calendarDayIndex(payload.toTime, payload.startDay))
+  addRecapCloses(daily, payload.recap, finalIndex)
 
   const candidates: Array<{ id: ItemId; base: number; points: PricePointView[]; score: number }> = []
   for (const [itemId, itemDays] of daily) {
     const base = startPrices.get(itemId)
     if (!base) continue
-    const closes = [...itemDays.entries()].filter(([day]) => day >= 1 && day <= days).sort((left, right) => left[0] - right[0])
+    const closes = [...itemDays.entries()]
+      .filter(([day]) => day >= 1 && day <= maxIndex)
+      .sort((left, right) => left[0] - right[0])
     if (closes.length === 0) continue
     const points: PricePointView[] = [{ x: 0, y: 100, price: base, label: 'Week open' }]
     for (const [day, price] of closes) {
-      points.push({ x: day, y: (price / base) * 100, price, label: `Day ${day} close` })
+      points.push({
+        x: day,
+        y: (price / base) * 100,
+        price,
+        label: weekPointLabel(payload.startDay, day, axis.partialIndex),
+      })
     }
     const last = closes[closes.length - 1][1]
     const changePct = ((last - base) / base) * 100
@@ -990,7 +1412,7 @@ function buildWeekPriceView(payload: FastForwardClonePayload, startSnapshot: Pub
     candidates.push({ id: itemId, base, points, score })
   }
   candidates.sort((left, right) => right.score - left.score)
-  return finalizePriceView('week', labels, candidates, 'No item quotes were recorded in this week.')
+  return finalizePriceView('week', axis.labels, candidates, 'No item quotes were recorded in this week.')
 }
 
 function buildLivePriceView(current: PublicSnapshot): PriceView {
@@ -1131,6 +1553,8 @@ function priceHistoryMarkers(
             ? ('closure' as const)
             : ('reopen' as const),
       band: annotation.kind === 'shock',
+      storyId: annotationStoryId(annotation),
+      kindLabel: annotationKindLabel(annotation.kind),
     })
     if (markers.length === 12) break
   }
@@ -1179,9 +1603,11 @@ function buildLivePriceHistoryView(current: PublicSnapshot): PriceHistoryView {
       byDay.set(day, record)
     }
   }
-  const days: PriceHistoryDay[] = [...candidates]
+  // Only render days that actually have a recorded quote. A day summary or the
+  // current day counter is not an observation, and drawing an empty column
+  // makes a one-point session look like a full week.
+  const days: PriceHistoryDay[] = [...byDay.keys()]
     .sort((left, right) => left - right)
-    .filter(day => byDay.has(day) || summaryDays.includes(day))
     .map(day => ({
       day,
       label: day === current.day ? 'Today' : `D${day}`,
@@ -1803,7 +2229,7 @@ interface TwinRow {
 
 function twinTable(caption: string, columns: string[], rows: TwinRow[]): string {
   if (rows.length === 0) return `<p class="empty-note">${esc(caption)}</p>`
-  return `<div class="twin-scroll"><table class="twin-table">
+  return `<div class="twin-scroll" tabindex="0" role="region" aria-label="${esc(caption)}"><table class="twin-table">
     <caption>${esc(caption)}</caption>
     <thead><tr>${columns.map(column => `<th scope="col">${esc(column)}</th>`).join('')}</tr></thead>
     <tbody>${rows
@@ -1912,6 +2338,9 @@ function priceHistoryCaption(view: PriceHistoryView): string {
   if (view.items.length === 0) return view.emptyText
   const visible = visiblePathItems(view)
   if (visible.length === 0) return 'All price paths are hidden — choose a good above to bring one back.'
+  if (view.labels.length <= 1) {
+    return `${visible.length} of ${view.items.length} goods shown. 1 observation — no change yet.`
+  }
   const changes = visible
     .map(item => {
       const first = item.points[0]
@@ -1924,6 +2353,9 @@ function priceHistoryCaption(view: PriceHistoryView): string {
     .sort((left, right) => Math.abs(right.change) - Math.abs(left.change))
   if (changes.length === 0) return `${visible.length} goods on the board.`
   const biggest = changes[0]
+  if (Math.abs(biggest.change) < 0.5) {
+    return `${visible.length} of ${view.items.length} goods shown. Prices are unchanged from the first close.`
+  }
   const direction = biggest.change < 0 ? 'cheaper' : 'dearer'
   return `${visible.length} of ${view.items.length} goods shown. Biggest move: ${biggest.item.label} ${Math.max(
     1,
@@ -1963,6 +2395,7 @@ function renderPriceHistoryCard(view: PriceHistoryView, force = false): void {
       points: item.points,
     }))
     const size = priceHistoryChartSize()
+    const focus = captureChartFocus($('price-history-chart'))
     $('price-history-chart').innerHTML = renderPriceSvg(series, {
       width: size.width,
       height: size.height,
@@ -1987,13 +2420,79 @@ function renderPriceHistoryCard(view: PriceHistoryView, force = false): void {
         return `${label}. ${rows.join('. ')}.`
       },
     })
+    restoreChartFocus($('price-history-chart'), focus)
   } else {
     activePriceHistoryView = view
   }
   $('price-history-caption').textContent = priceHistoryCaption(view)
   $('price-history-source').textContent = view.sourceNote
+  renderAnnotationStrip(view)
   syncTwin('price-history', priceHistoryTwin(view))
   updateChart('price-history', view.labels, Math.max(0, view.labels.length - 1))
+}
+
+function renderAnnotationStrip(view: PriceHistoryView): void {
+  const strip = $('annotation-strip')
+  const list = $('annotation-list')
+  const heading = strip.querySelector<HTMLElement>('.annotation-heading')
+  if (view.mode !== 'week') {
+    strip.hidden = true
+    list.innerHTML = ''
+    return
+  }
+  strip.hidden = false
+  if (heading) {
+    heading.textContent =
+      view.markers.length === 0
+        ? 'What moved the week'
+        : `What moved the week · ${view.markers.length} causal marker${view.markers.length === 1 ? '' : 's'}`
+  }
+  if (view.markers.length === 0) {
+    list.innerHTML = '<p class="annotation-empty">No shock, closure or reopen markers in this preview.</p>'
+    return
+  }
+  list.innerHTML = view.markers
+    .map((marker, index) => {
+      const day = view.labels[marker.x] ?? `Day ${marker.x + 1}`
+      const kind = marker.kindLabel ?? (marker.tone === 'closure' ? 'Closure' : marker.tone === 'reopen' ? 'Reopen' : 'Shock')
+      return `<button class="annotation-callout tone-${marker.tone}" type="button" data-annotation-index="${index}" aria-label="${esc(
+        `${day} · ${kind} · ${marker.label}. ${marker.title}. Open the matching story.`,
+      )}">
+        <span class="annotation-day">${esc(day)}</span>
+        <span class="annotation-copy">
+          <span class="annotation-kind">${esc(kind)}</span>
+          <strong>${esc(marker.label)}</strong>
+          <span class="annotation-chain">${esc(marker.title)}</span>
+        </span>
+      </button>`
+    })
+    .join('')
+}
+
+function activateAnnotation(index: number): void {
+  const marker = activePriceHistoryView?.markers[index]
+  if (!marker) return
+  setFromIndex('price-history', marker.x)
+  if (marker.storyId && openStoryItem(marker.storyId)) return
+  const details = $('proof-details') as HTMLDetailsElement
+  details.open = true
+  const firstStory = $('story-feed').querySelector<HTMLButtonElement>('.story-row')
+  const heading = $('story-title')
+  heading.scrollIntoView({ block: 'start', behavior: reducedMotionQuery.matches ? 'auto' : 'smooth' })
+  firstStory?.focus({ preventScroll: true })
+}
+
+function openStoryItem(id: string): boolean {
+  const button = [...document.querySelectorAll<HTMLButtonElement>('#story-feed .story-row')].find(
+    candidate => candidate.dataset.storyId === id,
+  )
+  if (!button) return false
+  const details = $('proof-details') as HTMLDetailsElement
+  details.open = true
+  if (button.getAttribute('aria-expanded') !== 'true') button.click()
+  button.scrollIntoView({ block: 'center', behavior: reducedMotionQuery.matches ? 'auto' : 'smooth' })
+  button.focus({ preventScroll: true })
+  return true
 }
 
 function renderPriceHistoryPlaceholder(text: string, force = false): void {
@@ -2014,6 +2513,8 @@ function renderPriceHistoryPlaceholder(text: string, force = false): void {
   })
   $('price-history-caption').textContent = text
   $('price-history-source').textContent = 'Preview only · the full item-by-item path is captured at each simulated close.'
+  $('annotation-strip').hidden = true
+  $('annotation-list').innerHTML = ''
   syncTwin('price-history', twinTable('The full price table appears when the preview finishes.', ['Good'], []))
   updateChart('price-history', [], 0)
 }
@@ -2436,6 +2937,7 @@ function renderPriceCard(view: PriceView, reveal: number, force = false): void {
       })),
     }))
     const size = priceChartSize()
+    const focus = captureChartFocus($('price-chart'))
     $('price-chart').innerHTML = renderPriceSvg(series, {
       width: size.width,
       height: size.height,
@@ -2449,6 +2951,7 @@ function renderPriceCard(view: PriceView, reveal: number, force = false): void {
       valueFormat: value => money(value),
       dayAriaLabel: x => priceDayAria(view, x, visible),
     })
+    restoreChartFocus($('price-chart'), focus)
     $('price-range').textContent = view.mode === 'week' ? 'Seven simulated days' : 'Recorded market history'
     $('price-sub').textContent =
       view.mode === 'week'
@@ -2657,6 +3160,7 @@ interface BotActivityRow {
   gather: number
   order: number
   total: number
+  lastAction: string
 }
 
 const isBotAction = (event: SequencedMarketEvent): boolean =>
@@ -2679,6 +3183,7 @@ function buildBotActivityRows(events: readonly SequencedMarketEvent[]): BotActiv
         gather: 0,
         order: 0,
         total: 0,
+        lastAction: '',
       }
       rows.set(id, row)
     }
@@ -2686,6 +3191,7 @@ function buildBotActivityRows(events: readonly SequencedMarketEvent[]): BotActiv
     else if (event.type === 'bot.gather') row.gather += 1
     else row.order += 1
     row.total += 1
+    row.lastAction = event.message
   }
   if (rows.size > 0) {
     characters.forEach((character, index) => {
@@ -2698,6 +3204,7 @@ function buildBotActivityRows(events: readonly SequencedMarketEvent[]): BotActiv
         gather: 0,
         order: 0,
         total: 0,
+        lastAction: '',
       })
     })
   }
@@ -2708,8 +3215,8 @@ function setActivityCopy(mode: 'live' | 'week'): void {
   $('activity-title').textContent = 'Bot activity'
   $('activity-sub').textContent =
     mode === 'week'
-      ? 'Sampled actions from the preview; the daily volume bars count every trade.'
-      : 'Trades, gathers and deliveries by the eight townsfolk.'
+      ? 'Preview sample · sampled actions from the throwaway clone; the daily volume bars count every trade.'
+      : 'Session actions · trades, gathers and deliveries recorded since this page opened.'
   const hint = $('activity-hint')
   hint.textContent = mode === 'week' ? 'Preview sample' : 'Session actions'
   hint.title =
@@ -2718,11 +3225,32 @@ function setActivityCopy(mode: 'live' | 'week'): void {
       : 'Only actions recorded in this browser session are shown.'
 }
 
+function activityTwin(rows: BotActivityRow[], mode: 'live' | 'week'): string {
+  const scope =
+    mode === 'week'
+      ? 'Preview sample — sampled actions from the throwaway clone; not every trade.'
+      : 'Session actions — recorded in this browser since the page opened.'
+  return twinTable(
+    `Bot activity · ${scope}`,
+    ['Bot', 'Trades', 'Gathers', 'Deliveries', 'Total', 'Last action'],
+    rows.map(row => ({
+      label: row.name,
+      cells: [
+        formatNumber(row.trade),
+        formatNumber(row.gather),
+        formatNumber(row.order),
+        formatNumber(row.total),
+        row.lastAction || '—',
+      ],
+    })),
+  )
+}
+
 function renderBotActivity(events: readonly SequencedMarketEvent[], force = false): void {
   const relevant = events.filter(isBotAction)
   const rows = buildBotActivityRows(relevant)
   const latest = relevant[relevant.length - 1]
-  const signature = `${viewMode}|${rows.map(row => `${row.id}:${row.trade}:${row.gather}:${row.order}`).join('|')}|${latest?.id ?? ''}`
+  const signature = `${viewMode}|${rows.map(row => `${row.id}:${row.trade}:${row.gather}:${row.order}:${row.lastAction}`).join('|')}|${latest?.id ?? ''}`
   if (!force && signature === activeActivitySignature) return
   activeActivitySignature = signature
 
@@ -2735,6 +3263,7 @@ function renderBotActivity(events: readonly SequencedMarketEvent[], force = fals
     caption.textContent = 'No bot actions recorded yet.'
     latestEl.textContent = 'Waiting for the townsfolk…'
     latestEl.title = ''
+    syncTwin('activity', activityTwin([], viewMode))
     return
   }
 
@@ -2778,6 +3307,7 @@ function renderBotActivity(events: readonly SequencedMarketEvent[], force = fals
       : `${countLabel(relevant.length, 'recorded action')} · ${money0(tradeValue)} moved in bot trades.`
   latestEl.innerHTML = `<span class="activity-dot" aria-hidden="true"></span>${esc(latest?.message ?? '')}`
   latestEl.title = latest?.message ?? ''
+  syncTwin('activity', activityTwin(rows, viewMode))
 }
 
 /* ------------------------------------------------------------------ live story feed */
@@ -2987,10 +3517,14 @@ function weekCompleteStory(payload: FastForwardClonePayload): StoryItem {
   }
 }
 
+function annotationStoryId(annotation: FastForwardAnnotation): string {
+  return `annotation:${annotation.kind}:${annotation.sequence}:${annotation.time}`
+}
+
 function annotationStory(annotation: FastForwardAnnotation, event?: SequencedMarketEvent): StoryItem {
   const detail = `<p class="story-why-text">${esc(annotation.chain)}</p>${event ? eventDetailHtml(event) : ''}`
   return {
-    id: `annotation:${annotation.kind}:${annotation.sequence}:${annotation.time}`,
+    id: annotationStoryId(annotation),
     time: annotation.time,
     day: annotation.day || dayOf(annotation.time),
     kind: annotationKindLabel(annotation.kind),
@@ -3058,9 +3592,40 @@ function dedupeStories(stories: StoryItem[]): StoryItem[] {
   return [...byId.values()]
 }
 
+interface FocusToken {
+  selector: string
+  attribute: string
+  value: string
+}
+
+function captureFocusToken(container: HTMLElement, selector: string, attribute: string): FocusToken | null {
+  const active = document.activeElement as HTMLElement | null
+  if (!active || !container.contains(active)) return null
+  const match = active.closest<HTMLElement>(selector)
+  const value = match?.getAttribute(attribute)
+  return value ? { selector, attribute, value } : null
+}
+
+function restoreFocusToken(container: HTMLElement, token: FocusToken | null): void {
+  if (!token) return
+  const next = [...container.querySelectorAll<HTMLElement>(token.selector)].find(
+    candidate => candidate.getAttribute(token.attribute) === token.value,
+  )
+  next?.focus({ preventScroll: true })
+}
+
+function captureChartFocus(container: HTMLElement): FocusToken | null {
+  return captureFocusToken(container, '[data-marker-index]', 'data-marker-index') ?? captureFocusToken(container, '[data-price-x]', 'data-price-x')
+}
+
+function restoreChartFocus(container: HTMLElement, token: FocusToken | null): void {
+  restoreFocusToken(container, token)
+}
+
 function renderStoryFeed(items: StoryItem[], newIds = new Set<string>()): void {
   const list = $('story-feed')
   const empty = $('story-empty')
+  const focus = captureFocusToken(list, '[data-story-id]', 'data-story-id')
   const sorted = [...items].sort((left, right) => right.time - left.time || right.id.localeCompare(left.id))
   if (sorted.length === 0) {
     list.innerHTML = ''
@@ -3088,6 +3653,7 @@ function renderStoryFeed(items: StoryItem[], newIds = new Set<string>()): void {
       </li>`
     })
     .join('')
+  restoreFocusToken(list, focus)
 }
 
 /* ------------------------------------------------------------------ event labels + priority */
@@ -3197,6 +3763,7 @@ async function startFastForward(): Promise<void> {
   button.disabled = true
   button.textContent = 'Simulating…'
   skip.hidden = true
+  hidePlaybackControls()
   showRunStrip('Cloning the town and running seven days…')
   setProgress(0, 'Starting the preview')
 
@@ -3260,6 +3827,12 @@ function startWeekRun(payload: FastForwardClonePayload): void {
   weekRun = state
   viewMode = 'week'
   renderModeBadge()
+  $('topbar').classList.remove('is-complete')
+  renderBriefPending(
+    'Week in progress',
+    `A throwaway clone is running from Day ${payload.startDay} to Day ${payload.endDay}. The live town is unchanged.`,
+    'Preview · not saved',
+  )
   setActivityCopy('week')
   selectedStoryId = null
   activePriceView = null
@@ -3304,11 +3877,27 @@ function startWeekRun(payload: FastForwardClonePayload): void {
           if (item.event.type === 'merchant.reopen') state.reopenCount += 1
         }
       },
+      onReset() {
+        if (weekRun !== state) return
+        state.mirror.clear()
+        state.reopenCount = 0
+        state.renderedDay = -1
+        state.renderedOpen = -1
+        state.revealedStoryCount = 0
+      },
       onProgress(progress: PlaybackProgress) {
         if (weekRun !== state) return
         const dayLabel = progress.phase === 'done' ? 'Preview complete' : progressLabel(state, progress.simTime)
+        const paused = progress.phase === 'paused'
         setProgress(progress.percent, dayLabel)
-        setRunStatus(progress.phase === 'done' ? `${dayLabel} · live town unchanged · not saved.` : `${dayLabel} · not saved.`)
+        setRunStatus(
+          progress.phase === 'done'
+            ? `${dayLabel} · live town unchanged · not saved.`
+            : paused
+              ? `${dayLabel} paused · live town unchanged · not saved.`
+              : `${dayLabel} · not saved.`,
+        )
+        syncPlaybackControls(progress)
         renderWeekFrame(state, progress.simTime, progress.phase === 'done', false)
       },
       onDone() {
@@ -3319,7 +3908,35 @@ function startWeekRun(payload: FastForwardClonePayload): void {
     { wallSeconds: 7 },
   )
   state.playback = playback
-  playback.start()
+  if (reducedMotionQuery.matches) playback.skipToEnd()
+  else playback.start()
+}
+
+function hidePlaybackControls(): void {
+  $('ff-pause').hidden = true
+  $('ff-step-back').hidden = true
+  $('ff-step').hidden = true
+}
+
+function syncPlaybackControls(progress: PlaybackProgress): void {
+  const pause = $('ff-pause') as HTMLButtonElement
+  const back = $('ff-step-back') as HTMLButtonElement
+  const forward = $('ff-step') as HTMLButtonElement
+  const done = progress.phase === 'done'
+  back.hidden = false
+  forward.hidden = false
+  pause.hidden = done
+  pause.textContent = progress.phase === 'paused' ? 'Resume' : 'Pause'
+  pause.setAttribute('aria-label', progress.phase === 'paused' ? 'Resume preview' : 'Pause preview')
+  back.disabled = progress.percent <= 0
+  forward.disabled = progress.percent >= 100
+  if (progress.phase === 'paused') {
+    $('ff-strip').setAttribute('aria-label', `Preview paused at day ${previewDayOf(weekRun as WeekRun, progress.simTime)}`)
+  } else if (done) {
+    $('ff-strip').setAttribute('aria-label', 'Seven-day preview complete')
+  } else {
+    $('ff-strip').setAttribute('aria-label', 'Seven-day preview playback')
+  }
 }
 
 function progressLabel(state: WeekRun, simTime: number): string {
@@ -3451,7 +4068,14 @@ function finishWeekRun(state: WeekRun): void {
   $('ff-run').textContent = 'Preview 7 days'
   $('ff-skip').hidden = true
   $('ff-strip').classList.remove('is-error')
-  renderMerchantCards(merchantOverridesFromRecap(payload.recap))
+  $('topbar').classList.add('is-complete')
+  $('ff-pause').hidden = true
+  $('ff-step-back').hidden = false
+  $('ff-step').hidden = false
+  $('ff-step').disabled = true
+  syncChromeMetrics()
+  renderBrief(buildWeekBrief(state))
+  renderMerchantCards(merchantOverridesFromRecap(payload.recap), state.startMerchantCash)
   renderNewspaper(payload.recap, true)
   renderRunProof()
 }
@@ -3495,6 +4119,7 @@ function showRunStrip(text: string): void {
   $('ff-strip').hidden = false
   $('ff-strip').classList.remove('is-error')
   setRunStatus(text)
+  syncChromeMetrics()
 }
 
 function setRunStatus(text: string): void {
@@ -3506,11 +4131,15 @@ function showRunError(cause: unknown): void {
   const message = cause instanceof Error ? cause.message : String(cause)
   $('ff-strip').hidden = false
   $('ff-strip').classList.add('is-error')
-  $('ff-status').textContent = `The week could not run: ${message} The page is still usable — try again when ready.`
-  setProgress(0, 'Not started')
+  $('ff-status').textContent =
+    'The preview could not run. Your live town is unchanged. Check your connection, then try again.'
+  $('ff-status').title = message
+  setProgress(0, 'Preview not started')
   $('ff-skip').hidden = true
+  hidePlaybackControls()
   $('ff-run').disabled = false
   $('ff-run').textContent = 'Try again'
+  syncChromeMetrics()
 }
 
 function setProgress(percent: number, valueText?: string): void {
@@ -3553,13 +4182,17 @@ function returnToLive(): void {
   $('ff-strip').hidden = true
   $('ff-strip').classList.remove('is-error')
   $('ff-status').textContent = 'Ready.'
+  $('ff-status').title = ''
   $('ff-skip').hidden = true
+  hidePlaybackControls()
+  $('topbar').classList.remove('is-complete')
   $('ff-run').disabled = false
   $('ff-run').textContent = 'Preview 7 days'
   $('view-live').hidden = true
   $('hero-context').textContent = liveContextLabel()
   $('clock-chip').classList.remove('is-preview')
   setProgress(0, 'Ready')
+  syncChromeMetrics()
   if (snapshot && config) renderLiveAll()
 }
 
@@ -3613,7 +4246,10 @@ function mergeEvents(events: SequencedMarketEvent[]): void {
 
 /* ------------------------------------------------------------------ merchant cards */
 
-function renderMerchantCards(overrides?: Map<MerchantId, MerchantMirror>): void {
+function renderMerchantCards(
+  overrides?: Map<MerchantId, MerchantMirror>,
+  previewStartCash?: Map<MerchantId, number>,
+): void {
   if (!snapshot || !config) return
   const current = snapshot
   const colors = ['#eab35e', '#8fb8d8', '#9ec9a3', '#c9a3c9', '#d8a48f', '#a9b6cc', '#b8c99e', '#d0b48a']
@@ -3623,7 +4259,10 @@ function renderMerchantCards(overrides?: Map<MerchantId, MerchantMirror>): void 
     const open = override?.open ?? merchant.open
     const bankrupt = override?.bankrupt ?? merchant.bankrupt
     const state = bankrupt ? 'bankrupt' : open ? 'open' : 'closed'
-    const change = cash - (current.daily.merchantCashStart[merchant.id] ?? cash)
+    const basis = previewStartCash
+      ? { mode: 'preview' as const, start: previewStartCash.get(merchant.id) ?? null }
+      : { mode: 'live' as const, start: current.daily.merchantCashStart[merchant.id] ?? cash }
+    const change = merchantCashChange(cash, basis)
     const reserveRatio = Math.max(0, Math.min(1, cash / Math.max(1e-6, merchant.reserve * 1.8)))
     const keyItem = config.merchants[merchant.id]?.sells?.[0]
     const ask = keyItem ? merchant.askPrices[keyItem] : undefined
@@ -3636,9 +4275,9 @@ function renderMerchantCards(overrides?: Map<MerchantId, MerchantMirror>): void 
         <span class="mstate ${state}">${state}</span>
       </div>
       <p class="mpersonality">${esc(merchant.personality)}</p>
-      <div class="mcash">${money0(cash)} <span class="${change >= 0 ? 'up' : 'down'}">${change >= 0 ? '+' : '−'}${money0(
-        Math.abs(change),
-      )} today</span></div>
+      <div class="mcash">${money0(cash)} <span class="${change.delta >= 0 ? 'up' : 'down'}">${change.delta >= 0 ? '+' : '−'}${money0(
+        Math.abs(change.delta),
+      )} ${change.label}</span></div>
       <div class="mbar ${reserveRatio < 0.5 ? 'low' : ''}"><span style="width:${(reserveRatio * 100).toFixed(0)}%"></span></div>
       <div class="mmeta"><span>reserve ${money0(merchant.reserve)}</span><span>${formatNumber(stock)} units in stock</span></div>
       ${ask !== undefined ? `<div class="mquote">${esc(itemLabel(keyItem))} ask <b>${money(ask)}</b></div>` : ''}
@@ -3712,6 +4351,7 @@ function renderEventStream(): void {
   if (!snapshot) return
   const current = snapshot
   const list = $('event-list')
+  const focus = captureFocusToken(list, '[data-event]', 'data-event')
   const merchantSelect = $('filter-merchant') as HTMLSelectElement
   if (merchantSelect.options.length <= 1) {
     const options = current.merchants
@@ -3738,6 +4378,7 @@ function renderEventStream(): void {
       </button></li>`,
     )
     .join('')
+  restoreFocusToken(list, focus)
   renderSelectedEvent()
 }
 
@@ -3758,6 +4399,7 @@ function renderSelectedEvent(): void {
 /* ------------------------------------------------------------------ newspaper + proof */
 
 function renderNewspaper(recap: Recap, preview: boolean): void {
+  const partialPreview = preview && !recap.closed
   const movers = (recap.topMovers ?? [])
     .slice(0, 5)
     .map(
@@ -3773,7 +4415,9 @@ function renderNewspaper(recap: Recap, preview: boolean): void {
   const best = recap.best
   const worst = recap.worst
   $('newspaper').innerHTML = `
-    <div class="recap-mast"><span>Ironblock daily</span><span>Day ${recap.day}${preview ? ' · preview' : ''}</span></div>
+    <div class="recap-mast"><span>Ironblock daily</span><span>Day ${recap.day}${
+      partialPreview ? ' · final partial day · preview' : preview ? ' · preview' : ''
+    }</span></div>
     <p class="recap-headline">${esc(recap.headline)}</p>
     <ul class="recap-story">${(recap.story ?? []).slice(0, 5).map(line => `<li>${esc(line)}</li>`).join('')}</ul>
     ${movers ? `<div class="recap-movers"><h4>Biggest price moves</h4><ul>${movers}</ul></div>` : ''}
@@ -3785,9 +4429,11 @@ function renderNewspaper(recap: Recap, preview: boolean): void {
         : ''
     }
     <p class="recap-footnote">${
-      preview
-        ? 'Deterministic seven-day clone recap — the same starting state and seed reproduce every number.'
-        : 'Live economy recap, updated as the town runs.'
+      partialPreview
+        ? 'Final partial day of the deterministic seven-day clone — this is not a full-week recap. The same starting state and seed reproduce every number.'
+        : preview
+          ? 'Deterministic seven-day clone recap — the same starting state and seed reproduce every number.'
+          : 'Live economy recap, updated as the town runs.'
     }</p>`
 }
 

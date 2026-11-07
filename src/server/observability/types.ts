@@ -61,6 +61,8 @@ export interface ObservabilityStream {
 export interface ObservabilityStreamSender {
   event(name: string, data: string): void
   comment(text: string): void
+  /** Emit the standard SSE `retry:` field (not a named event). */
+  retry(milliseconds: number): void
 }
 
 /* -------------------------------------------------------------------------- */

@@ -58,6 +58,10 @@ export interface PriceMarker {
   tone: PriceMarkerTone
   /** Draw a soft band across the day as well as a marker. */
   band?: boolean
+  /** Story-feed id used to reveal the causal detail when the marker is activated. */
+  storyId?: string
+  /** Human label for the annotation kind, used by the callout strip. */
+  kindLabel?: string
 }
 
 export interface PriceChartOptions {
@@ -324,7 +328,7 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
     .map((label, index) => {
       const anchor = labelCount <= 1 ? 'middle' : index === 0 ? 'start' : index === labelCount - 1 ? 'end' : 'middle'
       const x = scaleX(index)
-      const displayLabel = index === 0 && label === 'Open' && width < 430 ? 'D0' : label
+      const displayLabel = label
       return `<text class="chart-axis-label price-x-label" x="${x.toFixed(1)}" y="${height - 14}" fill="#77849a" font-size="11" text-anchor="${anchor}">${esc(
         displayLabel,
       )}</text>`
@@ -349,8 +353,13 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
           : `<rect class="price-marker-band" x="${(x - markerBandWidth / 2).toFixed(1)}" y="${pad.top}" width="${markerBandWidth.toFixed(
               1,
             )}" height="${plotH}" fill="${color}" opacity="0.065"/>`
-      return `<g class="price-marker price-marker-${marker.tone}" data-marker-index="${index}">
+      return `<g class="price-marker price-marker-${marker.tone}" data-marker-index="${index}" data-marker-x="${marker.x}" role="button" tabindex="0" focusable="true" aria-label="${esc(
+        `${marker.label} · ${marker.title}`,
+      )}">
         <title>${esc(`${marker.label} · ${marker.title}`)}</title>
+        <rect class="price-marker-hit" x="${(x - markerBandWidth / 2).toFixed(1)}" y="${pad.top}" width="${markerBandWidth.toFixed(
+          1,
+        )}" height="${plotH}" fill="transparent"/>
         ${band}
         <line class="price-marker-line" x1="${x.toFixed(1)}" y1="${pad.top}" x2="${x.toFixed(1)}" y2="${plotBottom}" stroke="${color}" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.72"/>
         <path d="M${(x - 4.5).toFixed(1)},${(pad.top - 11).toFixed(1)} L${(x + 4.5).toFixed(1)},${(pad.top - 11).toFixed(
@@ -482,11 +491,12 @@ export function renderPriceChart(series: PriceSeries[], options: PriceChartOptio
       </clipPath>
     </defs>
     <rect x="${plotLeft}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="12" fill="rgba(255,255,255,0.012)"/>
-    ${grid}${xLabels}${markers}
+    ${grid}${xLabels}
     <g clip-path="url(#${clipId})">${priceSeries}</g>
     <g class="price-start-layer">${startLayer}</g>
     ${playhead}
     ${bands}
+    ${markers}
     ${emptyText}
   </svg>`
 }
@@ -1314,7 +1324,9 @@ export function renderHeatmap(options: HeatmapOptions): string {
           .join('')}</tr>`,
     )
     .join('')
-  return `<div class="heatmap-scroll"><table class="heatmap-table" role="table" aria-label="${esc(
+  return `<div class="heatmap-scroll" tabindex="0" role="region" aria-label="${esc(
+    `${options.ariaLabel} — scrollable table`,
+  )}"><table class="heatmap-table" role="table" aria-label="${esc(
     options.ariaLabel,
   )}"><caption class="visually-hidden">${esc(options.ariaLabel)}</caption><thead><tr><th scope="col">Stall</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>`
 }

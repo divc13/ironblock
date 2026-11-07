@@ -36,18 +36,23 @@
           <span class="topbar-spacer"></span>
 
           <div class="topbar-actions">
-            <span class="preview-pill" id="preview-pill" title="The week forecast never advances or saves the live town">Preview only · not saved</span>
+            <span class="preview-pill" id="preview-pill" title="The week forecast never advances or saves the live town" hidden>Preview only · not saved</span>
             <button class="btn btn-primary" id="ff-run" type="button">Preview 7 days</button>
             <button class="btn btn-quiet" id="ff-skip" type="button" hidden>Skip to end</button>
             <a class="game-link" href="./index.html" id="open-game-link">Open game <span aria-hidden="true">→</span></a>
           </div>
         </div>
 
-        <div class="run-strip" id="ff-strip" hidden>
+        <div class="run-strip" id="ff-strip" role="group" aria-label="Seven-day preview playback" tabindex="0" hidden>
           <div class="run-strip-inner">
             <div class="run-copy">
               <span class="run-label">7-day preview</span>
               <span id="ff-status" role="status" aria-live="polite">Ready.</span>
+            </div>
+            <div class="run-controls" aria-label="Preview playback controls">
+              <button class="run-button" id="ff-step-back" type="button" aria-label="Step back one simulated day" hidden>−1 day</button>
+              <button class="run-button" id="ff-pause" type="button" aria-label="Pause preview" hidden>Pause</button>
+              <button class="run-button" id="ff-step" type="button" aria-label="Step forward one simulated day" hidden>+1 day</button>
             </div>
             <div
               class="progress"
@@ -97,7 +102,36 @@
           </p>
         </section>
 
-        <section class="card price-card" aria-labelledby="price-title">
+        <section class="week-brief" id="week-brief" aria-labelledby="week-brief-title">
+          <header class="brief-head">
+            <div>
+              <p class="section-kicker" id="brief-kicker">Today in brief</p>
+              <h2 id="week-brief-title">Today in brief</h2>
+            </div>
+            <div class="brief-tools">
+              <span class="brief-scope" id="brief-scope">Live snapshot</span>
+              <button class="brief-copy" id="brief-copy" type="button">Copy brief</button>
+              <span class="visually-hidden" id="brief-copy-status" role="status" aria-live="polite"></span>
+            </div>
+          </header>
+          <div class="brief-content" id="brief-content" aria-live="polite">
+            <p class="brief-lead">Reading the town’s tills and stalls…</p>
+          </div>
+        </section>
+
+        <nav class="section-nav" id="section-nav" aria-label="Jump to a section">
+          <span class="section-nav-label" aria-hidden="true">Jump to</span>
+          <a href="#price-paths">Price paths</a>
+          <a href="#cash-in-town">Cash</a>
+          <a href="#money-in-out">Flow</a>
+          <a href="#market-map">Market map</a>
+          <a href="#stall-risk">Risk</a>
+          <a href="#cash-changes">Cash changes</a>
+          <a href="#bot-activity">Activity</a>
+          <a href="#proof-details">Proof</a>
+        </nav>
+
+        <section class="card price-card" aria-labelledby="price-title" id="price-movers">
           <header class="card-head price-head">
             <div>
               <p class="section-kicker" id="price-range">Biggest recorded moves</p>
@@ -122,7 +156,7 @@
           <div class="twin-panel" id="price-table" hidden></div>
         </section>
 
-        <section class="card price-card price-history-card" aria-labelledby="price-history-title">
+        <section class="card price-card price-history-card" aria-labelledby="price-history-title" id="price-paths">
           <header class="card-head price-head">
             <div>
               <p class="section-kicker">Every good, every day</p>
@@ -144,11 +178,15 @@
           </div>
           <p class="chart-caption" id="price-history-caption">The full item-by-item paths appear when the preview finishes.</p>
           <p class="chart-source" id="price-history-source">Every recorded ask, indexed to its first close. Markers show shocks, closures and reopens.</p>
+          <div class="annotation-strip" id="annotation-strip" hidden>
+            <p class="annotation-heading">What moved the week</p>
+            <div class="annotation-list" id="annotation-list"></div>
+          </div>
           <div class="twin-panel" id="price-history-table" hidden></div>
         </section>
 
         <div class="insight-grid">
-          <section class="card money-card" aria-labelledby="money-title">
+          <section class="card money-card" aria-labelledby="money-title" id="cash-in-town">
             <header class="card-head">
               <div>
                 <p class="section-kicker">Where the money sits</p>
@@ -167,7 +205,7 @@
             <div class="twin-panel" id="money-table" hidden></div>
           </section>
 
-          <section class="card flow-card" aria-labelledby="flow-title">
+          <section class="card flow-card" aria-labelledby="flow-title" id="money-in-out">
             <header class="card-head">
               <div>
                 <p class="section-kicker">What feeds the town</p>
@@ -187,7 +225,7 @@
           </section>
         </div>
 
-        <section class="card heatmap-card" aria-labelledby="heatmap-title">
+        <section class="card heatmap-card" aria-labelledby="heatmap-title" id="market-map">
           <header class="card-head heatmap-head">
             <div>
               <p class="section-kicker">Every stall, every good</p>
@@ -206,7 +244,7 @@
         </section>
 
         <div class="risk-grid">
-          <section class="card risk-card" aria-labelledby="risk-title">
+          <section class="card risk-card" aria-labelledby="risk-title" id="stall-risk">
             <header class="card-head">
               <div>
                 <p class="section-kicker">Cash cushion × stock cushion</p>
@@ -221,7 +259,7 @@
             <div class="twin-panel" id="risk-table" hidden></div>
           </section>
 
-          <section class="card cash-card" aria-labelledby="cash-change-title">
+          <section class="card cash-card" aria-labelledby="cash-change-title" id="cash-changes">
             <header class="card-head">
               <div>
                 <p class="section-kicker">Per-stall attribution</p>
@@ -265,18 +303,22 @@
             <div class="twin-panel" id="volume-table" hidden></div>
           </section>
 
-          <section class="card activity-card" aria-labelledby="activity-title">
+          <section class="card activity-card" aria-labelledby="activity-title" id="bot-activity">
             <header class="card-head">
               <div>
                 <p class="section-kicker">The economy, acting</p>
                 <h2 id="activity-title">Bot activity</h2>
                 <p class="card-sub" id="activity-sub">Trades, gathers and deliveries by the eight townsfolk.</p>
               </div>
-              <p class="card-hint" id="activity-hint">Session actions</p>
+              <div class="card-tools">
+                <p class="card-hint" id="activity-hint">Session actions</p>
+                <button class="twin-toggle" type="button" data-twin="activity" data-twin-chart="activity-chart" aria-pressed="false" aria-controls="activity-table">Table</button>
+              </div>
             </header>
             <div class="activity-chart" id="activity-chart" aria-live="off"></div>
             <p class="activity-latest" id="activity-latest">Waiting for the townsfolk…</p>
             <p class="chart-caption" id="activity-caption">No bot actions recorded yet.</p>
+            <div class="twin-panel" id="activity-table" hidden></div>
           </section>
         </div>
 

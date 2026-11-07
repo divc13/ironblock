@@ -7,7 +7,9 @@ import type { FastForwardAnnotation, SequencedMarketEvent } from '../server/obse
  * and annotations are revealed in simulated-time order over one short wall
  * clock run (7 seconds by default). The page paints its day counter, summary,
  * chart and story feed from the same `simTime`, so they all move together.
- * `skipToEnd` reveals the remaining beats and finishes immediately.
+ * `pause`, `resume`, `step` and `skipToEnd` expose the same timeline without
+ * changing the simulated result. Stepping replays from the start through the
+ * target time so backwards steps are exact.
  */
 
 export interface PlaybackItem {
@@ -19,7 +21,7 @@ export interface PlaybackItem {
 }
 
 export interface PlaybackProgress {
-  phase: 'running' | 'done'
+  phase: 'running' | 'paused' | 'done'
   index: number
   total: number
   simTime: number
@@ -33,6 +35,8 @@ export interface PlaybackCallbacks {
   onReveal(item: PlaybackItem, index: number): void
   onProgress(progress: PlaybackProgress): void
   onDone(): void
+  /** Called before a seek replays the timeline from the beginning. */
+  onReset?(): void
 }
 
 export interface PlaybackOptions {
@@ -44,7 +48,7 @@ export class FastForwardPlayback {
   private readonly items: PlaybackItem[]
   private readonly wallSeconds: number
   private pointer = 0
-  private phaseState: 'idle' | 'running' | 'done' = 'idle'
+  private phaseState: 'idle' | 'running' | 'paused' | 'done' = 'idle'
   private wallElapsed = 0
   private lastFrame: number | null = null
   private raf: number | null = null
@@ -81,8 +85,12 @@ export class FastForwardPlayback {
     return this.items.length
   }
 
-  get phase(): 'idle' | 'running' | 'done' {
+  get phase(): 'idle' | 'running' | 'paused' | 'done' {
     return this.phaseState
+  }
+
+  get paused(): boolean {
+    return this.phaseState === 'paused'
   }
 
   start(): void {
@@ -91,6 +99,35 @@ export class FastForwardPlayback {
     this.lastFrame = null
     this.emitProgress()
     this.raf = requestAnimationFrame(this.loop)
+  }
+
+  pause(): void {
+    if (this.destroyed || this.phaseState !== 'running') return
+    this.phaseState = 'paused'
+    if (this.raf !== null) {
+      cancelAnimationFrame(this.raf)
+      this.raf = null
+    }
+    this.lastFrame = null
+    this.emitProgress()
+  }
+
+  resume(): void {
+    if (this.destroyed || this.phaseState !== 'paused') return
+    this.phaseState = 'running'
+    this.lastFrame = null
+    this.emitProgress()
+    this.raf = requestAnimationFrame(this.loop)
+  }
+
+  /** Seek by one simulated day; negative steps replay exactly from the start. */
+  step(direction: -1 | 1): void {
+    if (this.destroyed || this.phaseState === 'idle') return
+    const from = this.payload.fromTime
+    const to = this.payload.toTime
+    const current = this.phaseState === 'done' ? to : this.simNow()
+    const target = Math.min(to, Math.max(from, current + direction * 86400))
+    this.seekTo(target)
   }
 
   skipToEnd(): void {
@@ -124,6 +161,31 @@ export class FastForwardPlayback {
     return from + progress * span
   }
 
+  private seekTo(target: number): void {
+    const from = this.payload.fromTime
+    const to = this.payload.toTime
+    const span = Math.max(1, to - from)
+    const clamped = Math.min(to, Math.max(from, target))
+    if (this.raf !== null) {
+      cancelAnimationFrame(this.raf)
+      this.raf = null
+    }
+    this.lastFrame = null
+    this.pointer = 0
+    this.callbacks.onReset?.()
+    while (this.pointer < this.items.length && this.items[this.pointer].time <= clamped + 1e-6) {
+      this.revealAt(this.pointer)
+      this.pointer += 1
+    }
+    this.wallElapsed = ((clamped - from) / span) * this.wallSeconds
+    this.phaseState = 'paused'
+    if (clamped >= to) {
+      this.finish()
+    } else {
+      this.emitProgress()
+    }
+  }
+
   private emitProgress(): void {
     const from = this.payload.fromTime
     const to = this.payload.toTime
@@ -133,7 +195,7 @@ export class FastForwardPlayback {
         ? 100
         : Math.max(0, Math.min(100, ((simTime - from) / Math.max(1, to - from)) * 100))
     this.callbacks.onProgress({
-      phase: this.phaseState === 'done' ? 'done' : 'running',
+      phase: this.phaseState === 'done' ? 'done' : this.phaseState === 'paused' ? 'paused' : 'running',
       index: this.pointer,
       total: this.items.length,
       simTime,

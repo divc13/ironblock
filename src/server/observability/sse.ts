@@ -22,10 +22,12 @@ const DEFAULT_BATCH_LIMIT = 500
  * Server-Sent Events producer for the market feed.
  *
  * Message sequence per client:
- *   1. `retry` hint
- *   2. `snapshot`  — full sanitized spectator snapshot (initial state)
- *   3. `events`    — batches of new sequenced events as the world advances
- *   4. `snapshot`  — refreshed every `snapshotEveryMs` so slow tabs resync
+ *   1. `: comment` — stream banner
+ *   2. `retry:` field — reconnect delay
+ *   3. `snapshot`  — full sanitized spectator snapshot (initial state)
+ *   4. `events`    — batches of new sequenced events as the world advances
+ *   5. `snapshot`  — refreshed every `snapshotEveryMs` so slow tabs resync,
+ *                    even while events are flowing
  *   + `: ping` comments so proxies keep the connection open
  *
  * The producer never blocks or mutates the economy: it only reads. The
@@ -47,19 +49,23 @@ export function startMarketStream(
 
   let cursor = 0
 
-  const sendSnapshot = (): void => {
+  const sendSnapshot = (advanceCursor: boolean): void => {
     if (disposed) return
     const snapshot: PublicSnapshot = sanitizeSpectatorSnapshot(
       service.spectatorSnapshot(),
       service.config,
     )
-    cursor = Math.max(cursor, snapshot.sequence)
+    // The initial snapshot establishes the event cursor. Periodic snapshots
+    // must not skip events that have not been delivered yet (for example when
+    // a batch was truncated), so they only advance the cursor when every
+    // pending event was sent first.
+    if (advanceCursor) cursor = Math.max(cursor, snapshot.sequence)
     send.event('snapshot', JSON.stringify({ ok: true, serverTime: context.now(), snapshot }))
   }
 
   send.comment(`ironblock market stream; api path ${context.apiPath}`)
-  send.event('retry', '3000')
-  sendSnapshot()
+  send.retry(3000)
+  sendSnapshot(true)
 
   let lastSnapshotAt = context.now()
 
@@ -68,6 +74,7 @@ export function startMarketStream(
     try {
       const now = context.now()
       const events = publicize(service.eventsSince(cursor))
+      let sent = false
       if (events.length > 0) {
         const batch = events.slice(0, batchLimit)
         cursor = batch[batch.length - 1].sequence
@@ -81,12 +88,16 @@ export function startMarketStream(
             truncated: events.length > batch.length,
           }),
         )
-      } else if (now - lastSnapshotAt >= context.stream.snapshotEveryMs) {
-        lastSnapshotAt = now
-        sendSnapshot()
-      } else {
-        send.comment(`ping ${now}`)
+        sent = true
       }
+      if (now - lastSnapshotAt >= context.stream.snapshotEveryMs) {
+        // Send the batch first so the snapshot does not hide undelivered
+        // events. Only advance the cursor when the batch was not truncated.
+        sendSnapshot(events.length <= batchLimit)
+        lastSnapshotAt = now
+        sent = true
+      }
+      if (!sent) send.comment(`ping ${now}`)
     } catch (cause) {
       // Never kill the stream for a read error; report once as a comment.
       send.comment(`read-error ${(cause as Error).message}`)

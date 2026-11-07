@@ -182,9 +182,9 @@ describe('observability HTTP middleware', () => {
 
         res.on('data', (chunk: Buffer) => {
           buffer += chunk.toString()
-          // Wait until the snapshot's data frame is complete: the retry hint
-          // also carries a data line, and the big snapshot frame can span
-          // several chunks, so wait for its blank-line terminator.
+          // Wait until the snapshot's data frame is complete: the big
+          // snapshot frame can span several chunks, so wait for its
+          // blank-line terminator.
           const next = buffer.indexOf('event: snapshot\ndata: ')
           if (next >= 0 && buffer.indexOf('\n\n', next) >= 0) {
             res.destroy()
@@ -206,9 +206,10 @@ describe('observability HTTP middleware', () => {
 
     const eventIndex = frames.indexOf('event: snapshot')
     assert.ok(eventIndex >= 0, 'snapshot event should be sent immediately')
-    const retryIndex = frames.indexOf('event: retry')
-    assert.ok(retryIndex >= 0, 'retry hint should be present')
-    assert.ok(retryIndex < eventIndex)
+    const retryIndex = frames.indexOf('retry: 3000\n')
+    assert.ok(retryIndex >= 0, 'standard retry field should be present')
+    assert.ok(retryIndex < eventIndex, 'retry field should precede the first event')
+    assert.equal(frames.includes('event: retry'), false, 'retry must be a field, not an event')
 
     const dataLine = frames
       .slice(eventIndex)

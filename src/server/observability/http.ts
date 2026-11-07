@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ObservabilityContext, ObservabilityRequest, ObservabilityResult } from './types'
+import type {
+  ObservabilityContext,
+  ObservabilityRequest,
+  ObservabilityResult,
+  ObservabilityStreamSender,
+} from './types'
 import { handleObservabilityRequest } from './handlers'
 import { createObservabilityContext, ObservabilityContextOptions } from './context'
 
@@ -61,10 +66,7 @@ const stripApiPath = (rawUrl: string, apiPath: string): { path: string; query: U
   return { path: pathname, query: url.searchParams }
 }
 
-const sseEscapingWrite = (response: ServerResponse, sender: {
-  event: (name: string, data: string) => void
-  comment: (text: string) => void
-}): void => {
+const sseEscapingWrite = (response: ServerResponse, sender: ObservabilityStreamSender): void => {
   sender.event = (name, data) => {
     if (response.writableEnded) return
     response.write(`event: ${name}\n`)
@@ -76,6 +78,10 @@ const sseEscapingWrite = (response: ServerResponse, sender: {
   sender.comment = text => {
     if (response.writableEnded) return
     response.write(`: ${text}\n\n`)
+  }
+  sender.retry = milliseconds => {
+    if (response.writableEnded) return
+    response.write(`retry: ${milliseconds}\n\n`)
   }
 }
 
@@ -155,9 +161,10 @@ export function createObservabilityMiddleware(options: MiddlewareOptions): Conne
         Connection: 'keep-alive',
         'X-Accel-Buffering': 'no',
       })
-      const sender = {
+      const sender: ObservabilityStreamSender = {
         event: (_name: string, _data: string) => undefined,
         comment: (_text: string) => undefined,
+        retry: (_milliseconds: number) => undefined,
       }
       sseEscapingWrite(response, sender)
       const dispose = result.stream.start(sender)

@@ -141,7 +141,7 @@ JSON unless noted. Public data only (see privacy below).
 | --- | --- | --- |
 | GET | `/api/market/snapshot` | Sanitized `{ ok, serverTime, snapshot }`: summary, merchants, tape, daily series, item prices. No player ids. |
 | GET | `/api/market/events?since=<seq>&limit=<n>` | `{ ok, cursor, events, count, totalAvailable, truncated, firstRetainedSequence }`. `since` is an exclusive sequence cursor; `limit` defaults 200, max 500. |
-| GET | `/api/market/stream` | Server-Sent Events. Frame order: comment, `retry: 3000`, `snapshot`, then `events` batches (1 s poll) and periodic `snapshot` refreshes (15 s) plus `: ping` keep-alives. |
+| GET | `/api/market/stream` | Server-Sent Events. Wire sequence: an opening comment, the standard `retry: 3000` field, an initial `snapshot` event, then `events` batches (1 s poll) and periodic `snapshot` refreshes (15 s) even while events are flowing; `: ping` comments keep the connection alive when idle. |
 | GET | `/api/market/recap` | `{ ok, recap }`: newspaper-style headline, day, merchant standings, highlights — built from live public state. |
 | GET | `/api/market/proof` | `{ ok, proof }`: recorded NEAR testnet deployment (contract, treasury, 13 tokens, 533,000 genesis units, explorer links, testnet-only note). **No live chain calls.** |
 | POST | `/api/market/fast-forward` | Deterministic clone simulation. Body `{ "days": 7 }` (default 7, max 8; empty body = defaults). |
@@ -179,6 +179,12 @@ JSON unless noted. Public data only (see privacy below).
 - Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 3 s** server
   compute; the client playback spreads the simulated week over about 7 s. The
   event count depends on the live state the clone starts from.
+- The simulation runs synchronously. While the clone computes a seven-day run
+  the Node event loop can be blocked for roughly 3 s, during which other
+  requests may pause briefly. The live town is never mutated: the run only
+  reads the source snapshot and works on a throwaway clone. Removing the pause
+  would need an async/chunked engine or a separate Worker/queue; that
+  refactor is not part of this release.
 - Limits: body > 4096 bytes → `413 body_too_large`; malformed JSON /
   non-object → `400 invalid_json`; invalid `days` → `400 invalid_days`.
   Rate limit: **6 requests / 60 s per remote address** → `429 rate_limited`
@@ -212,23 +218,59 @@ public by design. `POST /fast-forward` responses apply the same sanitizer.
   `http://localhost:3000/spectator`); the build emits `spectator.html` for a
   static deployment. No RPGJS client bundle, no UI framework; vanilla TS + inline SVG
   charts.
-- Sections: top bar (status, day, clock, connection + demo badge), market tape,
-  merchant cards, economy health, event stream with filters and keyboard-usable
-  detail view, chart panels (cash, prices, all-good price paths, volume, town
-  cash split, external flows, price/stock market map, liquidity × stock risk,
-  per-stall cash attribution), fast-forward panel with annotated ~7 s playback
-  (pause/step/skip), newspaper recap, on-chain proof panel. The preview is
-  explicitly labelled **Preview only · not saved**; the week runs on a
-  throwaway clone, never advances the live town, and is never persisted.
+- Sections: top bar (status, day, clock, connection + demo badge), week brief,
+  section navigation, market tape, merchant cards, economy health, event stream
+  with filters and keyboard-usable detail view, chart panels (cash, prices,
+  all-good price paths, volume, town cash split, external flows, price/stock
+  market map, liquidity × stock risk, per-stall cash attribution), fast-forward
+  panel with annotated ~7 s playback (pause/step/skip), newspaper recap,
+  on-chain proof panel. The preview is explicitly labelled **Preview only ·
+  not saved**; the week runs on a throwaway clone, never advances the live
+  town, and is never persisted.
+- Week brief: a plain-language summary above the charts. In live mode it covers
+  today so far (till cash, biggest price move, top/weakest till, riskiest stall,
+  trade pace, two causal notes). In completed preview mode it covers the whole
+  preview, labels merchant cash as **over preview**, and links each causal note
+  to the matching story. **Copy brief** copies a Markdown version whose section
+  links are built from the current dashboard URL, so they work in dev, preview
+  and static production deployments.
+- Navigation and annotations: the sticky **Jump to** bar links every major
+  section. Completed previews add a **What moved the week** callout strip under
+  the price paths; activating a callout moves the shared day cursor to the
+  matching day and opens/focuses the causal story. Price markers are focusable
+  buttons with accessible names and lead to the same story.
+- Preview playback: the run strip can pause/resume, step one simulated day
+  backward or forward, and skip to the end. With reduced motion the preview
+  jumps straight to its completed state. Backward stepping rebuilds the mirrored
+  merchant state exactly and replays the intervening events.
+- Data semantics: weekly price buckets use calendar days (`dayOf(event.time) -
+  startDay + 1`), not elapsed 24-hour windows from a mid-day `fromTime`. When
+  the clone ends mid-day, the final partial day is a separate **Final** chart
+  bucket and is never folded into D7. Merchant cards after a preview compare
+  cash with the preview's opening tills, not the live day's opening tills. The
+  newspaper recap is explicitly labelled **final partial day** when the clone
+  stops mid-day, so it is not mistaken for a full-week summary.
+- Activity: live mode shows **Session actions** recorded in this browser since
+  the page opened. Preview mode shows **Preview sample**: sampled actions from
+  the throwaway clone. In both cases the daily volume bars count every trade,
+  and the activity panel has a table twin with each bot's trade, gather,
+  delivery, total and last action.
 - Cross-chart interaction: one canonical day cursor (`Open`, `Dn`, `Now`)
   follows the pointer or arrow keys across the price, price-path, cash, flow
   and volume charts. The cursor is a DOM overlay, so live SVG re-renders do not
   destroy it. Every chart has an exact-value table twin (`Show table`) built
-  from the same view model as the chart.
+  from the same view model as the chart; table scroll regions are keyboard
+  focusable.
 - Accessibility: focus-visible outlines, keyboard shortcuts, ARIA live/status
-  regions, contrast-checked palette, `prefers-reduced-motion` handling (charts
-  and playback respect it). Layouts verified at 1280×960, 1280×720 and
-  390×844, with no horizontal overflow or console errors.
+  regions, and `prefers-reduced-motion` handling (charts and playback respect
+  it). Focus is restored after live re-renders and event selection for story
+  rows, event rows, price days and causal markers. Touch targets grow to 44px
+  on coarse pointers, and completed previews compact the mobile top bar. Layouts
+  verified at 1440×900, 1280×720 and 390×844, with no horizontal overflow or
+  console errors.
+- Error handling: preview failures use plain language (“The preview could not
+  run. Your live town is unchanged.”), keep the technical cause in a title
+  tooltip, and leave the live dashboard usable.
 - Demo fallback: if the live API is unavailable, the page labels itself
   **Replay / demo** and runs the same `runFastForwardClone` + sanitizers
   against a local engine in the browser. Demo data is never presented as live.

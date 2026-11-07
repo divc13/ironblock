@@ -197,7 +197,15 @@ class DemoFeed implements MarketFeed {
 
 /* ------------------------------------------------------------------ factory */
 
-export type FeedFactory = () => Promise<{ feed: MarketFeed; fallbackReason?: string }>
+export type FeedFactory = () => Promise<{
+  feed: MarketFeed
+  fallbackReason?: string
+  /**
+   * Snapshot already fetched while validating the live API (or built by the
+   * demo feed). Boot reuses it instead of issuing a second full GET.
+   */
+  initialSnapshot?: PublicSnapshot
+}>
 
 /**
  * Tries the live API first; falls back to the deterministic local replay when
@@ -209,13 +217,14 @@ export const createFeed: FeedFactory = async () => {
   try {
     const snapshot = await live.getSnapshot()
     if (snapshot && typeof snapshot.sequence === 'number') {
-      return { feed: live }
+      return { feed: live, initialSnapshot: snapshot }
     }
     throw new Error('malformed snapshot')
   } catch (cause) {
     const demo = new DemoFeed()
     return {
       feed: demo,
+      initialSnapshot: await demo.getSnapshot(),
       fallbackReason:
         `Live API not reachable at ${apiBase} (${(cause as Error).message}); showing deterministic local replay.`,
     }
