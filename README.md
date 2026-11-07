@@ -43,9 +43,9 @@ Implemented:
 - “Continue with Google” and “Continue with email” login overlay in the RPGJS
   client. Login is mandatory: there is no guest or mock-economy path.
 - Public `AUTH_MODE=auth0` login through the deployment owner’s Auth0 SPA tenant.
-- Optional player-supplied NEAR testnet payout address. It can be skipped at
-  login and set later before the first withdrawal; withdrawals are disabled
-  until it exists.
+- Optional player-supplied NEAR testnet payout address. Login does not ask for
+  it; the withdrawal panel requests it before the first withdrawal, and
+  withdrawals are disabled until it exists.
 - Local `AUTH_MODE=near` login through the official NEAR Auth browser SDK and
   MPC-derived ed25519 identity.
 - Client-side check that the NEAR Auth ID token and access token describe the
@@ -138,9 +138,10 @@ token is stored in browser storage. The server verifies the raw OIDC ID token;
 its audience is the SPA client id, so no separate Auth0 API/resource server is
 required.
 
-The player can enter a NEAR testnet payout address after Google/email login, or
-skip it and set it from the withdrawal panel before the first withdrawal. The
-address is a payout destination only; Ironblock never asks for its private key.
+Login does not ask for a NEAR address. The first withdrawal opens the withdrawal
+panel’s payout-address form; withdrawals stay disabled until the player saves a
+testnet account. The address is a payout destination only; Ironblock never asks
+for its private key.
 
 ### Local NEAR Auth mode
 
@@ -304,18 +305,17 @@ until the server has issued a game session. There is no guest path.
 2. The Auth0 SPA SDK opens one popup with `openid profile email`. The ID token
    stays in the SDK’s in-memory cache; it is never written to browser storage.
 3. The browser sends the raw **ID token** to `POST /api/auth/auth0` (or
-   `<base>/api/auth/auth0`). It may also send an optional NEAR payout address.
+   `<base>/api/auth/auth0`). Login carries no NEAR address.
 4. The server verifies the ID token with the tenant JWKS (RS256, issuer,
    audience = SPA client id, expiry, subject), maps the Auth0 `sub` to a stable
-   pseudonymous player id, records the optional payout address separately, and
-   issues a short-lived HMAC-signed game session.
-5. The player may skip the payout address. Withdrawals are blocked with
-   `NEAR_ACCOUNT_REQUIRED` until they set one, either in the login step or from
-   the withdrawal panel. Setting a new address issues a fresh session and
-   revokes the old one.
-6. The browser stores only the game session in `sessionStorage` and connects to
+   pseudonymous player id, and issues a short-lived HMAC-signed game session.
+5. The browser stores only the game session in `sessionStorage` and connects to
    the RPGJS WebSocket with it. The server verifies the session and checks the
    in-process session record before accepting the socket.
+6. The game opens without another prompt. The withdrawal panel asks for a NEAR
+   payout account on first use. Withdrawals are blocked with
+   `NEAR_ACCOUNT_REQUIRED` until the player saves one. Setting or changing the
+   address issues a fresh session and revokes the old one.
 7. `POST /api/auth/logout` revokes the session. Both `/api/auth/session` and later
    WebSocket connections reject the revoked token.
 

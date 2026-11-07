@@ -1,10 +1,8 @@
 import type { AuthSessionResponse } from "../../shared/auth/types";
-import { isValidNearAccountId } from "../../shared/auth/near-account";
 import {
   Auth0LoginError,
   completeAuth0Login,
   loginWithAuth0,
-  type Auth0LoginResult,
 } from "./auth0";
 import { clientAuthMode } from "./config";
 import {
@@ -103,49 +101,7 @@ const STYLES = `
   background: linear-gradient(180deg, #fcd34d, #f59e0b);
   border-color: #fcd34d;
 }
-.ib-auth__button--ghost {
-  margin-top: 4px;
-  padding: 10px 16px;
-  background: transparent;
-  color: #cbd5e1;
-  font-size: 14px;
-}
 .ib-auth__button:disabled { cursor: progress; opacity: 0.55; }
-.ib-auth__address {
-  margin: 0 0 8px;
-  padding: 16px;
-  border: 1px solid rgba(56, 189, 248, 0.24);
-  border-radius: 14px;
-  background: rgba(15, 23, 42, 0.72);
-}
-.ib-auth__label {
-  display: block;
-  margin: 0 0 8px;
-  color: #e2e8f0;
-  font-size: 14px;
-  font-weight: 600;
-}
-.ib-auth__input {
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 10px;
-  background: #0f172a;
-  color: #f8fafc;
-  font: inherit;
-  font-size: 15px;
-}
-.ib-auth__input:focus-visible {
-  outline: 2px solid #38bdf8;
-  outline-offset: 1px;
-  border-color: #38bdf8;
-}
-.ib-auth__help {
-  margin: 9px 0 14px;
-  color: #94a3b8;
-  font-size: 12px;
-  line-height: 1.5;
-}
 .ib-auth__status {
   min-height: 24px;
   margin: 8px 0 4px;
@@ -240,33 +196,6 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
           Continue with email
         </button>
       </div>
-      <form class="ib-auth__address" data-role="address-form" hidden>
-        <label class="ib-auth__label" for="ib-auth-near-account">
-          NEAR payout address (optional)
-        </label>
-        <input
-          class="ib-auth__input"
-          id="ib-auth-near-account"
-          data-role="address"
-          type="text"
-          inputmode="text"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="you.testnet or a 64-hex account"
-          maxlength="64"
-        />
-        <p class="ib-auth__help">
-          Use a NEAR testnet account you control. Withdrawals stay disabled until
-          an address is set. You can skip this and add it before your first
-          withdrawal.
-        </p>
-        <button class="ib-auth__button ib-auth__button--primary" type="submit">
-          Save address and enter
-        </button>
-        <button class="ib-auth__button ib-auth__button--ghost" type="button" data-action="skip">
-          Skip for now
-        </button>
-      </form>
       <div class="ib-auth__status" role="status" aria-live="polite"></div>
       <a class="ib-auth__watch" href="${spectatorHref}" target="_blank" rel="noopener noreferrer" aria-label="Watch the live market without signing in">
         Watch the live market <span aria-hidden="true">↗</span>
@@ -279,16 +208,6 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
 
   const copy = root.querySelector<HTMLElement>('[data-role="copy"]')!;
   const fine = root.querySelector<HTMLElement>('[data-role="fine"]')!;
-  const methods = root.querySelector<HTMLElement>('[data-role="methods"]')!;
-  const addressForm = root.querySelector<HTMLFormElement>(
-    '[data-role="address-form"]',
-  )!;
-  const addressInput = root.querySelector<HTMLInputElement>(
-    '[data-role="address"]',
-  )!;
-  const skipButton = root.querySelector<HTMLButtonElement>(
-    '[data-action="skip"]',
-  )!;
   const status = root.querySelector<HTMLElement>(".ib-auth__status")!;
   const buttons = Array.from(
     root.querySelectorAll<HTMLButtonElement>("button[data-method]"),
@@ -300,13 +219,11 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
   );
 
   copy.textContent = auth0Mode
-    ? "Sign in with Google or email to play. Your NEAR payout address is optional and can be set now or before your first withdrawal."
+    ? "Sign in with Google or email to play. Your NEAR payout address is only requested from the withdrawal panel."
     : "Sign in with NEAR Auth to create your player identity. No wallet extension, seed phrase or gas prompt.";
   fine.textContent = auth0Mode
     ? "Testnet only. Ironblock never asks for a NEAR private key. Your payout address is only a withdrawal destination."
     : "Testnet only. Your NEAR key is derived by the MPC network; this app never receives a private key.";
-
-  let pendingAuth0: Auth0LoginResult | undefined;
 
   const setControlsDisabled = (disabled: boolean) => {
     controls.forEach((control) => (control.disabled = disabled));
@@ -333,18 +250,6 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
     setControlsDisabled(false);
   };
 
-  const showAddressStep = (message = "") => {
-    methods.hidden = true;
-    addressForm.hidden = false;
-    setIdle(message);
-    addressInput.focus();
-  };
-
-  const hideAddressStep = () => {
-    methods.hidden = false;
-    addressForm.hidden = true;
-  };
-
   const screen: LoginScreen = {
     element: root,
     setBusy,
@@ -359,7 +264,6 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
       screen.remove();
     } catch (error) {
       clearAuthSession();
-      if (pendingAuth0) showAddressStep();
       showError(
         error instanceof Error && error.message
           ? `The game connection failed: ${error.message}`
@@ -377,12 +281,11 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
 
     if (auth0Mode) {
       try {
-        pendingAuth0 = await loginWithAuth0(method);
-        showAddressStep(
-          "Signed in. Set a payout address now, or skip and add it before withdrawing.",
-        );
+        const auth0 = await loginWithAuth0(method);
+        setBusy("Saving your session…");
+        const session = await completeAuth0Login(auth0);
+        await finish(session);
       } catch (error) {
-        hideAddressStep();
         showError(
           error instanceof Auth0LoginError
             ? error.message
@@ -397,7 +300,6 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
       const session = await loginWithNearAuth(method);
       await finish(session);
     } catch (error) {
-      hideAddressStep();
       showError(
         error instanceof Error && error.message
           ? error.message
@@ -412,48 +314,6 @@ export function showLoginScreen(options: LoginScreenOptions): LoginScreen {
       void startLogin(method);
     });
   }
-
-  addressForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (!pendingAuth0) {
-      showError("Sign in again before setting a payout address.");
-      return;
-    }
-    const address = addressInput.value.trim();
-    if (address && !isValidNearAccountId(address)) {
-      showError(
-        "Enter a valid NEAR testnet account id, such as example.testnet, or leave it blank to skip.",
-      );
-      return;
-    }
-    setBusy("Saving your session…");
-    void completeAuth0Login(pendingAuth0, address || undefined)
-      .then(finish)
-      .catch((error: unknown) => {
-        showError(
-          error instanceof Error && error.message
-            ? error.message
-            : "The payout address could not be saved.",
-        );
-      });
-  });
-
-  skipButton.addEventListener("click", () => {
-    if (!pendingAuth0) {
-      showError("Sign in again before continuing.");
-      return;
-    }
-    setBusy("Saving your session…");
-    void completeAuth0Login(pendingAuth0)
-      .then(finish)
-      .catch((error: unknown) => {
-        showError(
-          error instanceof Error && error.message
-            ? error.message
-            : "The session could not be created.",
-        );
-      });
-  });
 
   // Restore a session from this tab before asking the player to sign in again.
   if (readAuthSession()) {

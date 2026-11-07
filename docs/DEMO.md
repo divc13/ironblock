@@ -66,17 +66,15 @@ npm run config:check
    **“Continue with Google”** and **“Continue with email”**.
 2. Choose **one** method and complete the Auth0 flow in the single popup.
 3. There is **no wallet extension, seed phrase, wallet popup or gas prompt**.
-   In public Auth0 mode the player supplies a NEAR payout address; it is only a
-   withdrawal destination and is never used to sign. In local `near` mode the
-   NEAR key is derived by the MPC network and the app never receives a private
-   key.
-4. After Auth0 returns, the overlay offers an optional **NEAR payout address**
-   field. Enter a testnet account you control, or choose **“Skip for now”**.
-   Withdrawals stay disabled until an address is set; it can also be set later
-   from the withdrawal panel.
-5. The overlay shows **“Session verified. Entering the town…”** and the game
+   Login does **not** ask for a NEAR address. In public Auth0 mode the payout
+   address is requested only from the withdrawal panel; it is a withdrawal
+   destination and is never used to sign. In local `near` mode the NEAR key is
+   derived by the MPC network and the app never receives a private key.
+4. The overlay shows **“Session verified. Entering the town…”** and the game
    starts in place. There is no guest mode and no mock economy behind the login
    screen.
+5. On the first withdrawal, the panel shows the **NEAR payout address** form.
+   Save a testnet account you control; withdrawals stay disabled until then.
 
 ---
 

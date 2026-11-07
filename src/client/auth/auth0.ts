@@ -82,20 +82,16 @@ export async function loginWithAuth0(
 
 /**
  * Exchange the verified Auth0 ID token for an Ironblock game session.
- * The optional payout address can be supplied now or later before withdrawal.
+ * Login never collects a payout address; the withdrawal panel sets it later.
  */
 export async function completeAuth0Login(
   login: Auth0LoginResult,
-  nearAccountId?: string,
 ): Promise<AuthSessionResponse> {
   const response = await fetch(`${clientAuth0Config.loginApiPath}/auth0`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({
-      idToken: login.idToken,
-      ...(nearAccountId ? { nearAccountId } : {}),
-    }),
+    body: JSON.stringify({ idToken: login.idToken }),
     signal: AbortSignal.timeout(30_000),
   });
 

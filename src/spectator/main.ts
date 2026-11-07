@@ -728,6 +728,7 @@ async function boot(): Promise<void> {
       snapshot = await feed.getSnapshot()
     }
     mergeEvents(snapshot.recentEvents)
+    updatePriceHistoryFromEvents(snapshot.recentEvents)
     seedPriceHistory()
     renderLiveAll()
   } catch (cause) {
@@ -739,6 +740,7 @@ function onStreamMessage(message: MarketStreamMessage): void {
   if (message.kind === 'snapshot' && message.snapshot) {
     snapshot = message.snapshot
     mergeEvents(snapshot.recentEvents)
+    updatePriceHistoryFromEvents(snapshot.recentEvents)
     seedPriceHistory()
     if (viewMode === 'live') renderLiveAll()
     return
@@ -1471,8 +1473,8 @@ function emptyPriceHistoryView(mode: 'live' | 'week'): PriceHistoryView {
     emptyText:
       mode === 'week'
         ? 'The preview did not include any item price snapshots.'
-        : 'Keep this page open to record daily item prices.',
-    sourceNote: 'Every recorded ask, indexed to its first close.',
+        : 'Keep this page open to record price changes.',
+    sourceNote: 'Every recorded ask, indexed to its first observation.',
   }
 }
 
@@ -1482,7 +1484,11 @@ interface PriceHistoryDay {
   prices: Record<string, { bid: number | null; ask: number | null }>
 }
 
-function priceHistoryItems(days: PriceHistoryDay[], market: string): PriceItemView[] {
+function priceHistoryItems(
+  days: PriceHistoryDay[],
+  market: string,
+  pointLabelSuffix = 'close',
+): PriceItemView[] {
   const byItem = new Map<ItemId, Array<{ x: number; price: number; label: string }>>()
   for (let index = 0; index < days.length; index += 1) {
     const day = days[index]
@@ -1506,7 +1512,7 @@ function priceHistoryItems(days: PriceHistoryDay[], market: string): PriceItemVi
         values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle]
       if (!Number.isFinite(price) || price <= 0) continue
       const points = byItem.get(itemId) ?? []
-      points.push({ x: index, price, label: day.label })
+      points.push({ x: index, price, label: `${day.label} ${pointLabelSuffix}` })
       byItem.set(itemId, points)
     }
   }
@@ -1528,7 +1534,7 @@ function priceHistoryItems(days: PriceHistoryDay[], market: string): PriceItemVi
         x: point.x,
         y: (point.price / base) * 100,
         price: point.price,
-        label: `${point.label} close`,
+        label: point.label,
       })),
     }
   })
@@ -1594,34 +1600,61 @@ function buildWeekPriceHistoryView(payload: FastForwardClonePayload): PriceHisto
 }
 
 function buildLivePriceHistoryView(current: PublicSnapshot): PriceHistoryView {
-  const summaryDays = current.summaries.slice(-7).map(summary => summary.day)
-  const candidates = new Set<number>([...summaryDays, current.day])
-  const byDay = new Map<number, Record<string, { bid: number | null; ask: number | null }>>()
-  for (const [key, points] of priceHistory) {
-    for (const point of points) {
-      const day = Math.floor(point.x / 86400) + 1
-      if (!candidates.has(day)) continue
-      const record = byDay.get(day) ?? {}
-      record[key] = { bid: null, ask: point.y }
-      byDay.set(day, record)
+  const points: Array<{ key: string; time: number; price: number }> = []
+  for (const [key, series] of priceHistory) {
+    for (const point of series) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.y <= 0) continue
+      points.push({ key, time: point.x, price: point.y })
     }
   }
-  // Only render days that actually have a recorded quote. A day summary or the
-  // current day counter is not an observation, and drawing an empty column
-  // makes a one-point session look like a full week.
-  const days: PriceHistoryDay[] = [...byDay.keys()]
-    .sort((left, right) => left - right)
-    .map(day => ({
-      day,
-      label: day === current.day ? 'Today' : `D${day}`,
-      prices: byDay.get(day) ?? {},
-    }))
-  const items = priceHistoryItems(days, priceHistoryMarket)
-  if (days.length === 0 || items.length === 0) return emptyPriceHistoryView('live')
+  if (points.length === 0) return emptyPriceHistoryView('live')
+
+  const times = [...new Set(points.map(point => point.time))].sort((left, right) => left - right)
+  const firstTime = times[0]
+  const lastTime = times[times.length - 1]
+  // The live feed only retains a short event window, but the latest snapshot can
+  // arrive much later than the last trade. Equal-width time buckets would then
+  // put every trade in one bucket and the snapshot in another. Bucket by
+  // observed timestamps instead so each interval contains actual quotes.
+  const bucketCount = Math.min(7, Math.max(1, times.length))
+  const bucketByTime = new Map<number, number>()
+  times.forEach((time, index) => {
+    bucketByTime.set(
+      time,
+      Math.min(bucketCount - 1, Math.floor((index * bucketCount) / times.length)),
+    )
+  })
+  const byBucket = new Map<number, Record<string, { bid: number | null; ask: number | null }>>()
+  const bucketStart = new Map<number, number>()
+  for (const point of points) {
+    const bucket = bucketByTime.get(point.time) ?? 0
+    const record = byBucket.get(bucket) ?? {}
+    record[point.key] = { bid: null, ask: point.price }
+    byBucket.set(bucket, record)
+    const start = bucketStart.get(bucket)
+    if (start === undefined || point.time < start) bucketStart.set(bucket, point.time)
+  }
+
+  const buckets = [...byBucket.keys()].sort((left, right) => left - right)
+  const showDay = Math.floor(firstTime / 86400) !== Math.floor(lastTime / 86400)
+  const days: PriceHistoryDay[] = buckets.map((bucket, index) => {
+    const start = bucketStart.get(bucket) ?? firstTime
+    return {
+      day: bucket + 1,
+      label:
+        index === buckets.length - 1 && current.time >= start
+          ? 'Now'
+          : liveTimeLabel(start, showDay),
+      prices: byBucket.get(bucket) ?? {},
+    }
+  })
+  const items = priceHistoryItems(days, priceHistoryMarket, 'observation')
+  if (items.length === 0) return emptyPriceHistoryView('live')
   const marketName =
     priceHistoryMarket === 'town'
       ? 'town median'
       : config?.merchants[priceHistoryMarket as MerchantId]?.displayName ?? priceHistoryMarket
+  const intervalLabel = days.length === 1 ? 'observation' : 'session intervals'
   return {
     mode: 'live',
     labels: days.map(day => day.label),
@@ -1630,10 +1663,19 @@ function buildLivePriceHistoryView(current: PublicSnapshot): PriceHistoryView {
     key: `live|${priceHistoryMarket}|${days.map(day => day.label).join('|')}|${items
       .map(item => `${item.id}:${item.points.map(point => point.price.toFixed(3)).join(',')}`)
       .join(';')}`,
-    ariaLabel: `Recorded price paths for every good observed at ${marketName} in this browser session.`,
-    emptyText: 'Keep this page open to record daily item prices.',
-    sourceNote: `Recorded this session · ${marketName} ask by day · indexed to the first observation.`,
+    ariaLabel: `Recorded price paths for every good observed at ${marketName} in this browser session over ${days.length} ${intervalLabel}.`,
+    emptyText: 'Keep this page open to record price changes.',
+    sourceNote: `Recorded this session · ${marketName} ask over ${days.length} ${intervalLabel} · indexed to the first observation.`,
   }
+}
+
+function liveTimeLabel(time: number, includeDay: boolean): string {
+  const seconds = ((Math.floor(time) % 86400) + 86400) % 86400
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+  const clock = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  return includeDay ? `D${Math.floor(time / 86400) + 1} ${clock}` : clock
 }
 
 function stockCover(merchant: PublicMerchant): number {
@@ -2355,15 +2397,16 @@ function priceHistoryCaption(view: PriceHistoryView): string {
     .filter((value): value is { item: PriceItemView; change: number } => Boolean(value))
     .sort((left, right) => Math.abs(right.change) - Math.abs(left.change))
   if (changes.length === 0) return `${visible.length} goods on the board.`
+  const baselineLabel = view.mode === 'week' ? 'first close' : 'first observation'
   const biggest = changes[0]
   if (Math.abs(biggest.change) < 0.5) {
-    return `${visible.length} of ${view.items.length} goods shown. Prices are unchanged from the first close.`
+    return `${visible.length} of ${view.items.length} goods shown. Prices are unchanged from the ${baselineLabel}.`
   }
   const direction = biggest.change < 0 ? 'cheaper' : 'dearer'
   return `${visible.length} of ${view.items.length} goods shown. Biggest move: ${biggest.item.label} ${Math.max(
     1,
     Math.round(Math.abs(biggest.change)),
-  )}% ${direction} from its first close.`
+  )}% ${direction} from its ${baselineLabel}.`
 }
 
 function priceHistoryTwin(view: PriceHistoryView): string {
@@ -2377,7 +2420,9 @@ function priceHistoryTwin(view: PriceHistoryView): string {
     }),
   }))
   return twinTable(
-    view.mode === 'week' ? 'Exact asks by good and simulated day' : 'Exact asks by good and recorded day',
+    view.mode === 'week'
+      ? 'Exact asks by good and simulated day'
+      : 'Exact asks by good and recorded interval',
     ['Good', ...view.labels],
     rows,
   )

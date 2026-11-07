@@ -80,10 +80,10 @@ The server verifies the raw OIDC **ID token**; its audience is the SPA client
 id. No Auth0 API/resource server and no client secret are required. Auth0 tokens
 stay in the SDK's in-memory cache and are never written to browser storage.
 
-The player-supplied NEAR payout address is optional at login. Withdrawals are
-blocked with `NEAR_ACCOUNT_REQUIRED` until the player sets one, either in the
-login step or from the withdrawal panel. The address is only a payout
-destination; Ironblock never asks for its private key.
+Login does not ask for a NEAR payout address. The withdrawal panel requests one
+on first use, and withdrawals are blocked with `NEAR_ACCOUNT_REQUIRED` until the
+player saves it. The address is only a payout destination; Ironblock never asks
+for its private key.
 
 ## Local NEAR Auth mode
 
