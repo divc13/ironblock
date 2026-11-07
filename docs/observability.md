@@ -161,9 +161,11 @@ JSON unless noted. Public data only (see privacy below).
   `{ day, endedAt, prices: { "merchantId:itemId": { bid, ask } } }`; asks and
   bids are sanitized market quotes only. Merchant and item keys are sorted
   deterministically, independent of snapshot key order. It is computed in the
-  throwaway clone and is not added to live SSE snapshots or `/snapshot`. The
-  dashboard uses every good at every close for its **Price paths** card,
-  indexed to the first close.
+  throwaway clone and is not added to live SSE snapshots or `/snapshot`. In week
+  preview the dashboard uses every good at every close for its **Price paths**
+  card, indexed to the first close. In live mode it separately records the
+  snapshot's retained trade events plus streamed events and shows up to seven
+  observed session intervals; it never invents missing days.
 - `annotations` are built server-side from real engine events (caravan
   arrivals, shocks, bankruptcies, reopens, distributions, recoveries, rent
   aggregates, day close) with causal-chain strings; the dashboard uses them for
