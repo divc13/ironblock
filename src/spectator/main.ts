@@ -689,8 +689,11 @@ async function boot(): Promise<void> {
   )
   renderHeatmapPlaceholder('Waiting for merchant quotes…', true)
 
+  // Kept outside the try block: the validated feed's initial snapshot is
+  // reused below so boot does not issue a duplicate full GET.
+  let created: Awaited<ReturnType<typeof createFeed>>
   try {
-    const created = await createFeed()
+    created = await createFeed()
     feed = created.feed
     demoNotice = created.fallbackReason ?? null
     config = feed.config
