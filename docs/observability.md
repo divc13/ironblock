@@ -177,14 +177,17 @@ JSON unless noted. Public data only (see privacy below).
 - Deterministic: identical live state + identical `days` yield identical
   series/priceHistory/events/annotations (verified by tests).
 - Measured on this machine: 7 days ≈ **20,160 steps**, **≈ 3 s** server
-  compute; the client playback spreads the simulated week over about 7 s. The
-  event count depends on the live state the clone starts from.
+  compute; the client playback spreads the simulated week over about 7 s. On a
+  small shared Railway container the same run measured **≈ 20 s**; the client
+  waits up to **45 s** before showing a plain-language failure. The event count
+  depends on the live state the clone starts from.
 - The simulation runs synchronously. While the clone computes a seven-day run
-  the Node event loop can be blocked for roughly 3 s, during which other
-  requests may pause briefly. The live town is never mutated: the run only
-  reads the source snapshot and works on a throwaway clone. Removing the pause
-  would need an async/chunked engine or a separate Worker/queue; that
-  refactor is not part of this release.
+  the Node event loop can be blocked for roughly 3 s locally, or around 20 s on
+  a small shared host, during which other requests may pause. The live town is
+  never mutated: the run only reads the source snapshot and works on a throwaway
+  clone. Removing the pause would need an async/chunked engine or a separate
+  Worker/queue; that refactor is not part of this release. A larger host or a
+  worker is recommended before serving heavy concurrent preview traffic.
 - Limits: body > 4096 bytes → `413 body_too_large`; malformed JSON /
   non-object → `400 invalid_json`; invalid `days` → `400 invalid_days`.
   Rate limit: **6 requests / 60 s per remote address** → `429 rate_limited`

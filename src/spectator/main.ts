@@ -3771,8 +3771,8 @@ async function startFastForward(): Promise<void> {
   try {
     const payload = await withTimeout(
       feed.runFastForward(7),
-      20_000,
-      'The simulation took longer than 20 seconds.',
+      45_000,
+      'The simulation took longer than 45 seconds. The live town is unchanged; try again.',
     )
     if (token !== fastForwardToken) return
     if (!payload || payload.ok !== true) throw new Error('The server did not return a completed week.')
